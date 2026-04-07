@@ -1,0 +1,1503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CHIP RENDER — Swing Analysis</title>
+<style>
+:root {
+  --bg:      #0a0e0b;
+  --bg2:     #0e130f;
+  --panel:   #0d1410;
+  --border:  #1f3020;
+  --accent:  #1a2421;
+  --orange:  #b7410e;
+  --text:    #e8e4dc;
+  --dim:     #586060;
+  --dimmer:  #303838;
+  --green:   #2d6a2d;
+  --greenhi: #4caf50;
+  --blue:    #4477aa;
+  --red:     #b7410e;
+  --mono:    'Courier New', Courier, monospace;
+  --serif:   Georgia, 'Times New Roman', serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  font-family: var(--mono);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* scanline overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0,0,0,0) 0px, rgba(0,0,0,0) 1px,
+    rgba(0,0,6,0.055) 1px, rgba(0,0,6,0.055) 2px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── APP SHELL ───────────────────────────────────────────────────────────── */
+#app {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── SHARED PANEL STYLES ─────────────────────────────────────────────────── */
+.panel {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--panel);
+}
+.panel:last-child { border-right: none; border-left: 1px solid var(--border); }
+
+.panel-section {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+}
+.panel-section:last-child { border-bottom: none; }
+
+.section-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--dim);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+/* ── LEFT PANEL ──────────────────────────────────────────────────────────── */
+#left-panel { overflow-y: auto; }
+
+#app-header {
+  padding: 14px 12px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#app-title {
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text);
+  line-height: 1;
+}
+#app-sub {
+  font-size: 9px;
+  color: var(--dim);
+  letter-spacing: 0.12em;
+  margin-top: 3px;
+}
+.version-tag {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--orange);
+  border: 1px solid var(--orange);
+  padding: 1px 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+  opacity: 0.85;
+}
+
+/* upload area */
+#upload-zone {
+  border: 1px dashed var(--border);
+  padding: 16px 12px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--dimmer);
+  transition: border-color 0.15s, color 0.15s;
+  cursor: pointer;
+  position: relative;
+}
+#upload-zone.drag-over { border-color: var(--dim); color: var(--dim); }
+#upload-zone input[type=file] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%;
+}
+#upload-zone-label {
+  font-size: 11px;
+  color: var(--dim);
+  display: block;
+  margin-bottom: 4px;
+}
+
+#upload-btn {
+  width: 100%;
+  padding: 8px;
+  background: var(--accent);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+#upload-btn:hover { background: #1f2e2a; border-color: var(--dim); }
+#upload-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* progress */
+#progress-wrap {
+  display: none;
+  margin-top: 8px;
+}
+#progress-label {
+  font-size: 9px;
+  color: var(--dim);
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+#progress-bar-track {
+  width: 100%;
+  height: 3px;
+  background: var(--border);
+}
+#progress-bar-fill {
+  height: 100%;
+  background: var(--orange);
+  width: 0%;
+  transition: width 0.3s;
+}
+#progress-pct {
+  font-size: 9px;
+  color: var(--orange);
+  text-align: right;
+  margin-top: 2px;
+}
+#status-msg {
+  font-size: 9px;
+  color: var(--dimmer);
+  margin-top: 4px;
+  min-height: 14px;
+}
+#error-msg {
+  font-size: 9px;
+  color: #cf3535;
+  margin-top: 4px;
+  display: none;
+}
+
+/* loaded file info */
+#loaded-file {
+  display: none;
+  font-size: 9px;
+  color: var(--dim);
+  margin-top: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  background: var(--accent);
+}
+#loaded-file span { color: var(--text); }
+
+/* session info */
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: 10px;
+}
+.info-key   { color: var(--dim); }
+.info-value { color: var(--text); }
+
+/* ── CENTER PANEL ────────────────────────────────────────────────────────── */
+#center-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background: #000;
+  border-right: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+}
+
+#video-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#main-video {
+  width: 100%;
+  height: 100%;
+  max-height: calc(100vh - 120px);
+  display: block;
+  object-fit: contain;
+  background: #000;
+}
+
+#landmarkCanvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 10;
+  display: none;
+}
+
+#btn-lm.lm-off { opacity: 0.45; }
+
+#no-video-msg {
+  color: var(--dimmer);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-align: center;
+  line-height: 2;
+}
+#no-video-msg span {
+  display: block;
+  font-size: 10px;
+  color: var(--dim);
+  margin-top: 6px;
+}
+
+/* controls */
+#controls {
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding: 8px 10px 6px;
+  flex-shrink: 0;
+}
+
+#scrub-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+#time-display { font-size: 10px; color: var(--text); white-space: nowrap; min-width: 88px; }
+
+#scrub-wrap {
+  flex: 1;
+  position: relative;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+#scrub-track {
+  width: 100%;
+  height: 3px;
+  background: #1c2620;
+  border: 1px solid var(--border);
+  position: relative;
+}
+#scrub-fill {
+  position: absolute;
+  left: 0; top: 0; height: 100%;
+  background: var(--orange);
+  width: 0%;
+  pointer-events: none;
+}
+#scrub-thumb {
+  position: absolute;
+  width: 10px; height: 10px;
+  background: var(--text);
+  top: 50%;
+  transform: translate(-50%, -50%);
+  left: 0%;
+  pointer-events: none;
+}
+.phase-tick {
+  position: absolute;
+  top: -5px;
+  width: 2px;
+  height: 13px;
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+
+#btn-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ctrl-btn {
+  background: var(--accent);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.1s;
+}
+.ctrl-btn:hover  { background: #1f2e2a; }
+.ctrl-btn:active { background: #253530; }
+.ctrl-btn.icon   { padding: 4px 8px; font-size: 14px; }
+
+#speed-select {
+  background: var(--accent);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 4px 6px;
+  cursor: pointer;
+  outline: none;
+}
+#speed-select option { background: #111; }
+.ctrl-spacer { flex: 1; }
+
+/* phase strip */
+#phase-strip {
+  display: flex;
+  gap: 1px;
+  background: var(--border);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.phase-btn {
+  flex: 1;
+  padding: 6px 2px;
+  text-align: center;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: var(--panel);
+  color: var(--dim);
+  border: none;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.phase-btn:hover  { background: var(--accent); color: var(--text); }
+.phase-btn.active { color: #fff; }
+
+/* frame info */
+#frame-info {
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  padding: 4px 10px;
+  font-size: 10px;
+  color: var(--dim);
+  display: flex;
+  gap: 16px;
+  flex-shrink: 0;
+}
+#frame-info span { color: var(--text); }
+
+/* ── RIGHT PANEL ─────────────────────────────────────────────────────────── */
+#right-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#right-header {
+  padding: 10px 12px 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#metrics-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--dim);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* phase tabs */
+#phase-tabs {
+  display: flex;
+  gap: 1px;
+  margin: 0 -12px;
+}
+.ptab {
+  flex: 1;
+  padding: 5px 2px;
+  text-align: center;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+  font-family: var(--mono);
+}
+.ptab:hover  { color: var(--text); }
+.ptab.active { color: var(--text); border-bottom-color: var(--orange); }
+
+#bench-note {
+  font-size: 8px;
+  color: var(--dimmer);
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.6;
+  flex-shrink: 0;
+}
+
+/* metrics scroll */
+#metrics-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 10px;
+}
+#metrics-scroll::-webkit-scrollbar { width: 4px; }
+#metrics-scroll::-webkit-scrollbar-thumb { background: var(--border); }
+
+/* metric cards */
+.metric-card {
+  border-left: 3px solid var(--dimmer);
+  padding: 7px 8px 6px;
+  margin-bottom: 5px;
+  background: var(--accent);
+  cursor: pointer;
+  transition: background 0.1s;
+  position: relative;
+}
+.metric-card:hover    { background: #1e2d29; }
+.metric-card.selected { outline: 1px solid var(--dim); }
+
+.metric-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+.m-name {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--dim);
+  text-transform: uppercase;
+  flex: 1;
+}
+.m-badge {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 4px;
+  border: 1px solid currentColor;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+.badge-pass   { color: #4caf50; }
+.badge-fail   { color: var(--orange); }
+.badge-camera { color: var(--dimmer); }
+.badge-gemini { color: #5599bb; }
+
+.m-val { font-size: 17px; font-weight: 400; line-height: 1.2; margin: 2px 0; }
+.val-pass   { color: #4caf50; }
+.val-fail   { color: #cf6535; }
+.val-camera { color: var(--dimmer); }
+.val-gemini { color: #5599bb; }
+.val-pass-neutral { color: var(--text); }
+
+.m-bar-wrap {
+  position: relative;
+  height: 3px;
+  background: #141e17;
+  margin: 5px 0 4px;
+}
+.m-bar-good {
+  position: absolute;
+  height: 100%;
+  background: rgba(45,106,45,0.65);
+}
+.m-bar-marker {
+  position: absolute;
+  width: 2px;
+  height: 7px;
+  top: -2px;
+  transform: translateX(-50%);
+}
+.m-bar-marker.pass { background: #4caf50; }
+.m-bar-marker.fail { background: #cf6535; }
+
+.m-bench  { font-size: 9px; color: var(--dim); margin-bottom: 2px; }
+.m-joints {
+  font-size: 9px; color: var(--dimmer);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.m-detail {
+  display: none;
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-size: 9px; color: var(--dim);
+}
+.m-detail.open { display: block; }
+
+/* fault section */
+#faults-section {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+#faults-section::-webkit-scrollbar { width: 4px; }
+#faults-section::-webkit-scrollbar-thumb { background: var(--border); }
+
+.fault-label {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.15em;
+  color: var(--dim); text-transform: uppercase; margin-bottom: 6px;
+}
+.fault-card {
+  border-left: 3px solid;
+  padding: 7px 8px; margin-bottom: 5px;
+  background: var(--accent); cursor: pointer; transition: background 0.1s;
+}
+.fault-card:hover { background: #1e2d29; }
+.fault-card.critical { border-left-color: #cf3535; }
+.fault-card.moderate { border-left-color: #cc8800; }
+.fault-name  { font-size: 10px; font-weight: 700; color: var(--text); margin-bottom: 2px; }
+.fault-meta  { font-size: 8px; color: var(--dim); margin-bottom: 3px; }
+.fault-desc  { font-size: 8px; color: var(--dimmer); line-height: 1.6; display: none; }
+.fault-card:hover .fault-desc { display: block; }
+.fault-confirmed { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.conf-tag { font-size: 8px; padding: 1px 4px; border: 1px solid var(--dimmer); color: var(--dimmer); }
+
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- ══ LEFT PANEL ══════════════════════════════════════════════════════════ -->
+<aside class="panel" id="left-panel">
+
+  <div id="app-header">
+    <div id="app-title">CHIP RENDER <span class="version-tag">v1.0</span></div>
+    <div id="app-sub">SWING ANALYSIS SUITE</div>
+  </div>
+
+  <div class="panel-section">
+    <div class="section-label">Upload Video</div>
+    <div id="upload-zone">
+      <input type="file" id="file-input" accept=".mp4,.mov" />
+      <span id="upload-zone-label">Drop .mp4 / .mov here</span>
+      <span style="font-size:9px;color:var(--dimmer)">or click to browse · max 500 MB</span>
+    </div>
+    <div id="progress-wrap">
+      <div id="progress-label">—</div>
+      <div id="progress-bar-track"><div id="progress-bar-fill"></div></div>
+      <div id="progress-pct">0%</div>
+      <div id="status-msg"></div>
+    </div>
+    <div id="error-msg"></div>
+    <div id="loaded-file">Loaded: <span id="lf-name">—</span></div>
+  </div>
+
+  <div class="panel-section" style="flex:1">
+    <div class="section-label">Session Info</div>
+    <div>
+      <div class="info-row"><span class="info-key">File</span><span class="info-value" id="si-file">—</span></div>
+      <div class="info-row"><span class="info-key">Duration</span><span class="info-value" id="si-dur">—</span></div>
+      <div class="info-row"><span class="info-key">FPS</span><span class="info-value" id="si-fps">—</span></div>
+      <div class="info-row"><span class="info-key">Resolution</span><span class="info-value" id="si-res">—</span></div>
+      <div class="info-row"><span class="info-key">Size</span><span class="info-value" id="si-size">—</span></div>
+      <div class="info-row"><span class="info-key">Pose frames</span><span class="info-value" id="si-poses">—</span></div>
+    </div>
+  </div>
+
+  <div class="panel-section">
+    <div class="section-label">Keyboard Shortcuts</div>
+    <div style="font-size:9px;color:var(--dimmer);line-height:2">
+      <div><span style="color:var(--dim)">Space</span> &nbsp; Play / Pause</div>
+      <div><span style="color:var(--dim)">← →</span> &nbsp;&nbsp; Step frame</div>
+      <div><span style="color:var(--dim)">1 – 7</span> &nbsp; Jump P1–P7</div>
+    </div>
+  </div>
+
+</aside>
+
+<!-- ══ CENTER PANEL ════════════════════════════════════════════════════════ -->
+<main id="center-panel">
+
+  <div id="video-wrap">
+    <video id="main-video" preload="metadata" style="display:none"></video>
+    <canvas id="landmarkCanvas"></canvas>
+    <div id="no-video-msg">
+      NO VIDEO LOADED
+      <span>Upload a .mp4 file using the left panel</span>
+    </div>
+  </div>
+
+  <div id="controls">
+    <div id="scrub-row">
+      <div id="time-display">0:00.0 / 0:00.0</div>
+      <div id="scrub-wrap">
+        <div id="scrub-track">
+          <div id="scrub-fill"></div>
+          <div id="scrub-thumb"></div>
+        </div>
+      </div>
+    </div>
+    <div id="btn-row">
+      <button class="ctrl-btn icon" id="btn-play" onclick="togglePlay()" title="Play/Pause (Space)">&#9654;</button>
+      <button class="ctrl-btn icon" onclick="stepFrame(-1)" title="Step back (&#8592;)">&#9198;</button>
+      <button class="ctrl-btn icon" onclick="stepFrame(1)"  title="Step forward (&#8594;)">&#9197;</button>
+      <div class="ctrl-spacer"></div>
+      <label style="font-size:9px;color:var(--dim);letter-spacing:.1em">SPEED</label>
+      <select id="speed-select" onchange="setSpeed(this.value)">
+        <option value="0.25">0.25x</option>
+        <option value="0.5">0.5x</option>
+        <option value="1" selected>1.0x</option>
+        <option value="2">2.0x</option>
+      </select>
+      <button class="ctrl-btn" id="btn-lm" onclick="toggleLandmarks()"
+              title="Toggle landmark overlay" style="font-size:9px;letter-spacing:.06em">LM ON</button>
+      <button class="ctrl-btn icon" onclick="toggleFullscreen()" title="Fullscreen">&#9974;</button>
+    </div>
+  </div>
+
+  <div id="phase-strip"></div>
+
+  <div id="frame-info">
+    <div>Frame: <span id="fi-frame">0</span></div>
+    <div>Time: <span id="fi-time">0.000s</span></div>
+    <div>Phase: <span id="fi-phase">—</span></div>
+    <div>FPS: <span id="fi-fps">30</span></div>
+  </div>
+
+</main>
+
+<!-- ══ RIGHT PANEL ══════════════════════════════════════════════════════════ -->
+<aside class="panel" id="right-panel">
+
+  <div id="right-header">
+    <div id="metrics-title">
+      METRICS
+      <span style="font-size:9px;color:var(--dimmer)">Tour Pro</span>
+    </div>
+    <div id="phase-tabs"></div>
+  </div>
+
+  <div id="bench-note">Data: GOLFTEC SwingTRU · Stanford Motion Lab · TPI</div>
+
+  <div id="metrics-scroll"></div>
+
+  <div id="faults-section">
+    <div class="fault-label">Fault Clusters</div>
+    <div id="fault-list"></div>
+  </div>
+
+</aside>
+</div><!-- #app -->
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DATA
+// ═══════════════════════════════════════════════════════════════════════════
+const JOINT_NAMES = {
+  0:'Nose', 11:'L Shoulder', 12:'R Shoulder',
+  13:'L Elbow', 14:'R Elbow', 15:'L Wrist', 16:'R Wrist',
+  23:'L Hip', 24:'R Hip', 25:'L Knee', 26:'R Knee',
+  27:'L Ankle', 28:'R Ankle'
+};
+
+const PHASE_ORDER = ['P1','P2','P3','P4','P5','P6','P7'];
+
+// Populated dynamically from /phases API; defaults used for scrub ticks only
+const PHASES = {
+  P1: { frame: 0,   time: 0,    label: 'Address',    detected: false },
+  P2: { frame: 0,   time: 0,    label: 'Takeaway',   detected: false },
+  P3: { frame: 0,   time: 0,    label: 'Halfway',    detected: false },
+  P4: { frame: 0,   time: 0,    label: 'Top',        detected: false },
+  P5: { frame: 0,   time: 0,    label: 'Transition', detected: false },
+  P6: { frame: 0,   time: 0,    label: 'Pre-Impact', detected: false },
+  P7: { frame: 0,   time: 0,    label: 'Impact',     detected: false },
+};
+
+const PHASE_COLORS = {
+  P1:'#888899', P2:'#009999', P3:'#996600',
+  P4:'#6644bb', P5:'#aa0099', P6:'#998800', P7:'#009944'
+};
+
+const METRICS = {
+  P1:[
+    {name:'Spine Angle',      value:39.1, unit:'°',lo:38, hi:42,  joints:[11,12,23,24],result:'PASS'},
+    {name:'Trail Elbow',      value:157.1,unit:'°',lo:160,hi:170, joints:[12,14,16],   result:'FAIL'},
+    {name:'Trail Knee Flex',  value:33.5, unit:'°',lo:20, hi:25,  joints:[24,26,28],   result:'FAIL'},
+    {name:'Lead Knee Flex',   value:20.1, unit:'°',lo:20, hi:25,  joints:[23,25,27],   result:'PASS'},
+    {name:'Hip Lateral Shift',value:0,    unit:'%',lo:0,  hi:0,   joints:[23,24],      result:'CAMERA LIMIT'},
+    {name:'Head Drift',       value:0,    unit:'%',lo:0,  hi:0,   joints:[0],          result:'CAMERA LIMIT'},
+    {name:'Wrist Position',   value:null, unit:'°',lo:0,  hi:3,   joints:[15,16],      result:'GEMINI FLASH'},
+  ],
+  P2:[
+    {name:'Spine Angle',      value:39.0, unit:'°',lo:37, hi:42,  joints:[11,12,23,24],result:'PASS'},
+    {name:'Shoulder Turn',    value:5.7,  unit:'°',lo:20, hi:25,  joints:[11,12],      result:'FAIL'},
+    {name:'Hip Turn',         value:5.1,  unit:'°',lo:5,  hi:8,   joints:[23,24],      result:'PASS'},
+    {name:'X-Factor',         value:0.7,  unit:'°',lo:15, hi:20,  joints:[11,12,23,24],result:'FAIL'},
+    {name:'Trail Elbow',      value:156.8,unit:'°',lo:155,hi:165, joints:[12,14,16],   result:'PASS'},
+    {name:'Trail Knee Flex',  value:36.4, unit:'°',lo:20, hi:25,  joints:[24,26,28],   result:'FAIL'},
+    {name:'Lead Knee Flex',   value:18.9, unit:'°',lo:20, hi:25,  joints:[23,25,27],   result:'FAIL'},
+    {name:'Hip Lateral Shift',value:0.1,  unit:'%',lo:0,  hi:0,   joints:[23,24],      result:'CAMERA LIMIT'},
+    {name:'Head Drift',       value:0.7,  unit:'%',lo:0,  hi:0,   joints:[0],          result:'CAMERA LIMIT'},
+    {name:'Wrist Cock',       value:null, unit:'°',lo:10, hi:20,  joints:[15,16],      result:'GEMINI FLASH'},
+  ],
+  P3:[
+    {name:'Spine Angle',      value:37.7, unit:'°',lo:36, hi:42,  joints:[11,12,23,24],result:'PASS'},
+    {name:'Shoulder Turn',    value:33.4, unit:'°',lo:50, hi:56,  joints:[11,12],      result:'FAIL'},
+    {name:'Hip Turn',         value:20.4, unit:'°',lo:25, hi:30,  joints:[23,24],      result:'FAIL'},
+    {name:'X-Factor',         value:13.0, unit:'°',lo:25, hi:35,  joints:[11,12,23,24],result:'FAIL'},
+    {name:'Trail Elbow',      value:147.6,unit:'°',lo:100,hi:110, joints:[12,14,16],   result:'FAIL'},
+    {name:'Trail Knee Flex',  value:39.5, unit:'°',lo:20, hi:25,  joints:[24,26,28],   result:'FAIL'},
+    {name:'Lead Knee Flex',   value:null, unit:'°',lo:22, hi:30,  joints:[23,25,27],   result:'CAMERA LIMIT'},
+    {name:'Hip Lateral Shift',value:0.1,  unit:'%',lo:0,  hi:0,   joints:[23,24],      result:'CAMERA LIMIT'},
+    {name:'Head Drift',       value:4.5,  unit:'%',lo:0,  hi:0,   joints:[0],          result:'CAMERA LIMIT'},
+    {name:'Wrist Cock',       value:null, unit:'°',lo:45, hi:60,  joints:[15,16],      result:'GEMINI FLASH'},
+  ],
+  P4:[
+    {name:'Spine Angle',      value:36.1, unit:'°',lo:35, hi:42,  joints:[11,12,23,24],result:'PASS'},
+    {name:'Shoulder Turn',    value:77.6, unit:'°',lo:90, hi:100, joints:[11,12],      result:'FAIL'},
+    {name:'Hip Turn',         value:37.5, unit:'°',lo:40, hi:50,  joints:[23,24],      result:'FAIL'},
+    {name:'X-Factor',         value:40.1, unit:'°',lo:55, hi:60,  joints:[11,12,23,24],result:'FAIL'},
+    {name:'Trail Elbow',      value:85.7, unit:'°',lo:85, hi:95,  joints:[12,14,16],   result:'PASS'},
+    {name:'Trail Knee Flex',  value:39.0, unit:'°',lo:20, hi:25,  joints:[24,26,28],   result:'FAIL'},
+    {name:'Lead Knee Flex',   value:null, unit:'°',lo:25, hi:35,  joints:[23,25,27],   result:'CAMERA LIMIT'},
+    {name:'Wrist Height',     value:66.8, unit:'%',lo:0,  hi:0,   joints:[15,16],      result:'CAMERA LIMIT'},
+    {name:'Hip Lateral Shift',value:-0.1, unit:'%',lo:0,  hi:0,   joints:[23,24],      result:'CAMERA LIMIT'},
+    {name:'Head Drift',       value:1.2,  unit:'%',lo:0,  hi:0,   joints:[0],          result:'CAMERA LIMIT'},
+  ],
+  P5:[
+    {name:'Spine Angle',      value:36.6, unit:'°',lo:35, hi:42,  joints:[11,12,23,24],result:'PASS'},
+    {name:'Shoulder Turn',    value:69.7, unit:'°',lo:90, hi:95,  joints:[11,12],      result:'FAIL'},
+    {name:'Hip Turn',         value:35.4, unit:'°',lo:35, hi:42,  joints:[23,24],      result:'PASS'},
+    {name:'X-Factor Stretch', value:-14.5,unit:'%',lo:10, hi:999, joints:[11,12,23,24],result:'FAIL'},
+    {name:'Trail Elbow',      value:87.1, unit:'°',lo:85, hi:92,  joints:[12,14,16],   result:'PASS'},
+    {name:'Trail Knee Flex',  value:39.7, unit:'°',lo:30, hi:35,  joints:[24,26,28],   result:'FAIL'},
+    {name:'Lead Knee Flex',   value:null, unit:'°',lo:20, hi:30,  joints:[23,25,27],   result:'CAMERA LIMIT'},
+    {name:'Sequencing',       value:'Hips lead 5.8°',unit:'',lo:0,hi:0,joints:[11,12,23,24],result:'PASS'},
+    {name:'Wrist Lag',        value:null, unit:'°',lo:85, hi:90,  joints:[15,16],      result:'GEMINI FLASH'},
+  ],
+  P6:[
+    {name:'Spine Angle',      value:40.8, unit:'°',lo:35, hi:42,  joints:[11,12,23,24],result:'PASS'},
+    {name:'Spine Side-Bend',  value:1.7,  unit:'°',lo:15, hi:20,  joints:[11,12,23,24],result:'CAMERA LIMIT'},
+    {name:'Shoulder Turn',    value:8.3,  unit:'°',lo:40, hi:55,  joints:[11,12],      result:'FAIL'},
+    {name:'Hip Turn',         value:5.6,  unit:'°',lo:20, hi:28,  joints:[23,24],      result:'FAIL'},
+    {name:'X-Factor',         value:2.7,  unit:'°',lo:20, hi:30,  joints:[11,12,23,24],result:'FAIL'},
+    {name:'Trail Elbow',      value:117.5,unit:'°',lo:85, hi:95,  joints:[12,14,16],   result:'FAIL'},
+    {name:'Trail Knee Flex',  value:51.6, unit:'°',lo:25, hi:30,  joints:[24,26,28],   result:'FAIL'},
+    {name:'Lead Knee Flex',   value:null, unit:'°',lo:20, hi:25,  joints:[23,25,27],   result:'CAMERA LIMIT'},
+    {name:'Wrist Lag',        value:null, unit:'°',lo:80, hi:90,  joints:[15,16],      result:'GEMINI FLASH'},
+    {name:'Hip Lateral Shift',value:0.0,  unit:'%',lo:0,  hi:0,   joints:[23,24],      result:'CAMERA LIMIT'},
+    {name:'Head Drift',       value:2.0,  unit:'%',lo:0,  hi:0,   joints:[0],          result:'CAMERA LIMIT'},
+  ],
+  P7:[
+    {name:'Spine Angle',      value:32.9, unit:'°',lo:35, hi:90,  joints:[11,12,23,24],result:'FAIL'},
+    {name:'Spine Side-Bend',  value:4.1,  unit:'°',lo:23, hi:25,  joints:[11,12,23,24],result:'CAMERA LIMIT'},
+    {name:'Shoulder Turn',    value:23.0, unit:'°',lo:20, hi:30,  joints:[11,12],      result:'PASS'},
+    {name:'Hip Turn',         value:16.8, unit:'°',lo:33, hi:39,  joints:[23,24],      result:'FAIL'},
+    {name:'X-Factor',         value:6.2,  unit:'°',lo:10, hi:15,  joints:[11,12,23,24],result:'FAIL'},
+    {name:'Trail Elbow',      value:141.4,unit:'°',lo:90, hi:105, joints:[12,14,16],   result:'FAIL'},
+    {name:'Trail Knee Flex',  value:44.2, unit:'°',lo:25, hi:30,  joints:[24,26,28],   result:'FAIL'},
+    {name:'Lead Knee Flex',   value:5.5,  unit:'°',lo:12, hi:18,  joints:[23,25,27],   result:'FAIL'},
+    {name:'Forward Shaft Lean',value:null,unit:'°',lo:4,  hi:7,   joints:[15,16],      result:'GEMINI FLASH'},
+    {name:'Hip Lateral Shift',value:0.0,  unit:'%',lo:0,  hi:0,   joints:[23,24],      result:'CAMERA LIMIT'},
+    {name:'Head Drift',       value:-18.3,unit:'%',lo:0,  hi:0,   joints:[0],          result:'CAMERA LIMIT'},
+    {name:'Early Extension',  value:'NO', unit:'', lo:0,  hi:0,   joints:[11,12,23,24],result:'PASS'},
+  ],
+};
+
+const FAULTS = [
+  {
+    severity:'critical',
+    name:'Casting / Early Release',
+    detected:'P5',
+    evidence:'X-Factor Stretch -14.5%  (Tour: +19%)',
+    joints:[12,14,16],
+    confirmed:['P6 Trail Elbow 117.5°','P7 Trail Elbow 141.4°'],
+    desc:'Lag releases before impact. Wrists uncock early causing flip/scoop. Primary power and compression leak.'
+  },
+  {
+    severity:'critical',
+    name:'Body Stall / Blocked Rotation',
+    detected:'P3',
+    evidence:'Shoulder 33.4° at P3 · Hip/Shoulder near-zero at P6',
+    joints:[11,12,23,24],
+    confirmed:['P4 Shoulder Turn 77.6°','P6 Shoulder 8.3°','P6 Hip 5.6°'],
+    desc:'Body decelerates through impact. Arms take over causing the cast. Hip and shoulder rotation severely below tour standard from P3 onward.'
+  },
+  {
+    severity:'moderate',
+    name:'Knee Posture',
+    detected:'P1',
+    evidence:'Trail knee 33.5° at address  (Tour: 20-25°)',
+    joints:[24,26,28],
+    confirmed:['P4 Trail Knee 39.0°','P6 Trail Knee 51.6°','P7 Lead Knee 5.5°'],
+    desc:'Setup crouch too deep. Trail knee over-flexed throughout. Lead leg loses its post at impact (5.5° vs 12-18° needed).'
+  },
+];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════════
+let currentPhase    = 'P1';
+let selectedMetricI = -1;
+let isScrubbing     = false;
+let frameLookup     = {};
+let videoFps        = 30;
+let landmarksOn     = true;
+let poseFrameCount  = 0;
+
+const video = document.getElementById('main-video');
+const FPS_DEFAULT = 30;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════════════════════════════════════
+function fmtTime(sec) {
+  if (!isFinite(sec)) return '0:00.0';
+  const m = Math.floor(sec / 60);
+  const s = (sec % 60).toFixed(1).padStart(4, '0');
+  return `${m}:${s}`;
+}
+function fmtSize(bytes) {
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+function jnames(joints) {
+  return joints.map(j => JOINT_NAMES[j] || `J${j}`).join(' · ');
+}
+function getCurrentPhaseFromTime(t) {
+  let last = null;
+  for (const p of PHASE_ORDER) {
+    if (PHASES[p].detected && t >= PHASES[p].time - 0.02) last = p;
+  }
+  return last;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UPLOAD FLOW
+// ═══════════════════════════════════════════════════════════════════════════
+function setProgress(pct, label) {
+  document.getElementById('progress-bar-fill').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent = pct + '%';
+  if (label) document.getElementById('progress-label').textContent = label;
+}
+
+function setStatus(msg) {
+  document.getElementById('status-msg').textContent = msg;
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-msg');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setStatus('');
+  setProgress(0, '');
+}
+
+function clearError() {
+  const el = document.getElementById('error-msg');
+  el.textContent = '';
+  el.style.display = 'none';
+}
+
+function showUploadProgress() {
+  document.getElementById('progress-wrap').style.display = 'block';
+  clearError();
+}
+
+function hideUploadProgress() {
+  document.getElementById('progress-wrap').style.display = 'none';
+}
+
+async function pollJob(job_id) {
+  while (true) {
+    await sleep(1000);
+    const r = await fetch('/progress/' + job_id);
+    const d = await r.json();
+    if (d.status === 'error') throw new Error(d.error || 'Processing failed');
+    const pct = d.total > 0 ? Math.round(d.progress / d.total * 100) : 0;
+    setProgress(pct, `Extracting landmarks: ${d.progress}/${d.total} frames`);
+    setStatus(`${pct}% — est. 1-3 min`);
+    if (d.status === 'done') {
+      setStatus('Loading results...');
+      setProgress(100, 'Fetching landmark data...');
+      const res = await fetch('/result/' + job_id);
+      return res.json();
+    }
+  }
+}
+
+async function uploadVideo(file) {
+  if (file.size > 500 * 1024 * 1024) {
+    showError('File too large. Max 500 MB.');
+    return;
+  }
+
+  showUploadProgress();
+  setStatus('Uploading...');
+  document.getElementById('upload-btn') && (document.getElementById('upload-btn').disabled = true);
+
+  // Update zone label
+  document.getElementById('upload-zone-label').textContent = file.name;
+  document.getElementById('si-file').textContent = file.name;
+  document.getElementById('si-size').textContent = fmtSize(file.size);
+
+  try {
+    // ── Upload via XHR (for upload progress) ──
+    const fd  = new FormData();
+    fd.append('video', file);
+
+    const job_id = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/process');
+
+      xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable) {
+          const pct = Math.round(e.loaded / e.total * 100);
+          setProgress(pct, `Uploading ${file.name}...`);
+          setStatus(`${pct}%`);
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        try {
+          const resp = JSON.parse(xhr.responseText);
+          if (resp.error) reject(new Error(resp.error));
+          else resolve(resp.job_id);
+        } catch (e) {
+          reject(new Error('Bad server response'));
+        }
+      });
+      xhr.addEventListener('error', () => reject(new Error('Upload failed — check file size')));
+      xhr.send(fd);
+    });
+
+    // ── Poll MediaPipe progress ──
+    setStatus('MediaPipe processing...');
+    setProgress(0, 'Starting landmark extraction...');
+    const landmarkData = await pollJob(job_id);
+
+    // ── Build frame lookup ──
+    buildFrameLookup(landmarkData);
+    document.getElementById('si-poses').textContent = poseFrameCount + ' frames';
+
+    // ── Detect phases ──
+    setStatus('Detecting swing phases...');
+    setProgress(100, 'Detecting P1-P7 phases...');
+
+    const phaseResp = await fetch('/phases', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ frames: landmarkData.frames, fps: landmarkData.fps }),
+    });
+    const phaseData = await phaseResp.json();
+    updatePhases(phaseData, landmarkData.fps || 30);
+
+    // ── Load video ──
+    video.src = URL.createObjectURL(file);
+    video.load();
+
+    document.getElementById('main-video').style.display  = '';
+    document.getElementById('no-video-msg').style.display = 'none';
+    document.getElementById('si-fps').textContent = (landmarkData.fps || 30) + ' fps';
+    document.getElementById('si-res').textContent =
+      (landmarkData.width || '—') + 'x' + (landmarkData.height || '—');
+
+    document.getElementById('loaded-file').style.display = 'block';
+    document.getElementById('lf-name').textContent = file.name;
+
+    hideUploadProgress();
+    setStatus('');
+
+    renderPhaseStrip();
+    renderPhaseTabs();
+    renderMetrics();
+
+  } catch (err) {
+    showError(err.message || 'Unknown error');
+  }
+}
+
+function updatePhases(data, fps) {
+  for (const p of PHASE_ORDER) {
+    const d = data[p];
+    if (d && d.detected) {
+      PHASES[p].frame    = d.frame;
+      PHASES[p].time     = d.time_s;
+      PHASES[p].detected = true;
+    } else {
+      PHASES[p].detected = false;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LANDMARK OVERLAY
+// ═══════════════════════════════════════════════════════════════════════════
+function buildFrameLookup(data) {
+  frameLookup    = {};
+  poseFrameCount = 0;
+  videoFps       = data.fps || 30;
+
+  data.frames.forEach(f => {
+    if (f.poses && f.poses.length > 0 && f.poses[0].landmarks_2d) {
+      frameLookup[f.frame] = f.poses[0];
+      poseFrameCount++;
+    }
+  });
+
+  document.getElementById('landmarkCanvas').style.display = '';
+  console.log('Loaded', poseFrameCount, 'pose frames at', videoFps, 'fps');
+}
+
+function toggleLandmarks() {
+  landmarksOn = !landmarksOn;
+  const btn = document.getElementById('btn-lm');
+  if (landmarksOn) {
+    btn.textContent = 'LM ON';
+    btn.classList.remove('lm-off');
+  } else {
+    btn.textContent = 'LM OFF';
+    btn.classList.add('lm-off');
+    const canvas = document.getElementById('landmarkCanvas');
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+const JOINT_COLORS_CANVAS = {
+  0:'#c8c0b0',
+  11:'#4a8eff', 13:'#4a8eff', 15:'#4a8eff',
+  23:'#4a8eff', 25:'#4a8eff', 27:'#4a8eff',
+  12:'#b7410e', 14:'#b7410e', 16:'#b7410e',
+  24:'#b7410e', 26:'#b7410e', 28:'#b7410e',
+};
+const BONES_CANVAS = [
+  [11,12,'#c8c0b0'],[23,24,'#c8c0b0'],
+  [11,23,'#c8c0b0'],[12,24,'#c8c0b0'],
+  [0,11,'#c8c0b0'], [0,12,'#c8c0b0'],
+  [11,13,'#4a8eff'],[13,15,'#4a8eff'],
+  [12,14,'#b7410e'],[14,16,'#b7410e'],
+  [23,25,'#4a8eff'],[25,27,'#4a8eff'],
+  [24,26,'#b7410e'],[26,28,'#b7410e'],
+];
+const JOINT_IDS_CANVAS = [0,11,12,13,14,15,16,23,24,25,26,27,28];
+
+function getVideoRect(canvas) {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const cw = canvas.width;
+  const ch = canvas.height;
+  if (!vw || !vh) return { x: 0, y: 0, w: cw, h: ch };
+  const vAsp = vw / vh;
+  const cAsp = cw / ch;
+  if (vAsp > cAsp) {
+    const h = cw / vAsp;
+    return { x: 0, y: (ch - h) / 2, w: cw, h };
+  } else {
+    const w = ch * vAsp;
+    return { x: (cw - w) / 2, y: 0, w, h: ch };
+  }
+}
+
+function toPixel(lm, rect) {
+  return { x: rect.x + lm.x * rect.w, y: rect.y + lm.y * rect.h };
+}
+
+function drawLandmarks() {
+  const canvas = document.getElementById('landmarkCanvas');
+  const ctx    = canvas.getContext('2d');
+
+  const rect   = canvas.getBoundingClientRect();
+  canvas.width  = rect.width;
+  canvas.height = rect.height;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!landmarksOn || !poseFrameCount) return;
+
+  const currentFrame = Math.round(video.currentTime * videoFps);
+  const pose = frameLookup[currentFrame];
+  if (!pose) return;
+
+  const lm2d = pose.landmarks_2d;
+  const lm3d = pose.landmarks_3d;
+  if (!lm2d) return;
+
+  const vRect = getVideoRect(canvas);
+
+  function zRadius(id) {
+    const l3 = lm3d && lm3d[String(id)];
+    if (!l3) return 5;
+    const zNorm = Math.max(0, Math.min(1, (l3.z + 0.3) / 0.6));
+    return Math.round(3 + zNorm * 7);
+  }
+
+  // Draw bones
+  BONES_CANVAS.forEach(([a, b, color]) => {
+    const la = lm2d[String(a)];
+    const lb = lm2d[String(b)];
+    if (!la || !lb) return;
+    const minVis = Math.min(la.visibility, lb.visibility);
+    if (minVis < 0.15) return;
+    const pa = toPixel(la, vRect);
+    const pb = toPixel(lb, vRect);
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(pb.x, pb.y);
+    ctx.strokeStyle  = color;
+    ctx.globalAlpha  = Math.min(1, 0.25 + minVis * 0.75);
+    ctx.lineWidth    = minVis > 0.5 ? 2 : 1;
+    ctx.stroke();
+    ctx.globalAlpha  = 1;
+  });
+
+  // Draw joints
+  JOINT_IDS_CANVAS.forEach(id => {
+    const lm = lm2d[String(id)];
+    if (!lm || lm.visibility < 0.15) return;
+    const p     = toPixel(lm, vRect);
+    const r     = zRadius(id);
+    const color = JOINT_COLORS_CANVAS[id] || '#ffffff';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    if (lm.visibility >= 0.5) {
+      ctx.fillStyle   = color;
+      ctx.globalAlpha = Math.min(1, 0.55 + lm.visibility * 0.45);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.lineWidth   = 1;
+      ctx.globalAlpha = 0.6;
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = 1.5;
+      ctx.globalAlpha = 0.4;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// METRIC BAR
+// ═══════════════════════════════════════════════════════════════════════════
+function makeBar(m) {
+  if (m.result === 'CAMERA LIMIT' || m.result === 'GEMINI FLASH') return '';
+  if (m.value === null || typeof m.value === 'string') return '';
+  if (m.lo === 0 && m.hi === 0) return '';
+
+  const v    = parseFloat(m.value);
+  const lo   = m.lo;
+  const hiC  = Math.min(m.hi, 180);
+
+  let minV, maxV;
+  if (m.unit === '%') {
+    minV = Math.min(-40, v - 5);
+    maxV = Math.max(60, hiC + 15);
+  } else {
+    minV = 0;
+    maxV = Math.max(185, v * 1.08, hiC * 1.4);
+  }
+  const span = maxV - minV || 1;
+
+  const goodL  = Math.max(0, (lo - minV) / span * 100);
+  const goodW  = Math.min(100 - goodL, (hiC - lo) / span * 100);
+  const valPos = Math.min(99, Math.max(1, (v - minV) / span * 100));
+  const cls    = m.result === 'PASS' ? 'pass' : 'fail';
+
+  return `<div class="m-bar-wrap">
+    <div class="m-bar-good" style="left:${goodL.toFixed(1)}%;width:${goodW.toFixed(1)}%"></div>
+    <div class="m-bar-marker ${cls}" style="left:${valPos.toFixed(1)}%"></div>
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CARD RENDERS
+// ═══════════════════════════════════════════════════════════════════════════
+function makeMetricCard(m, idx) {
+  const r      = m.result;
+  const isNull = m.value === null;
+  const isStr  = typeof m.value === 'string';
+
+  let valStr;
+  if (isNull) valStr = '—';
+  else if (isStr) valStr = m.value;
+  else valStr = m.value + m.unit;
+
+  let borderCol, valCls, badgeCls, badgeTxt;
+  if      (r === 'PASS')         { borderCol='#2d6a2d'; valCls='val-pass';   badgeCls='badge-pass';   badgeTxt='PASS'; }
+  else if (r === 'FAIL')         { borderCol='#b7410e'; valCls='val-fail';   badgeCls='badge-fail';   badgeTxt='FAIL'; }
+  else if (r === 'CAMERA LIMIT') { borderCol='#333';    valCls='val-camera'; badgeCls='badge-camera'; badgeTxt='DTL only'; }
+  else                           { borderCol='#336688'; valCls='val-gemini'; badgeCls='badge-gemini'; badgeTxt='AI vision'; }
+
+  if (isStr && r === 'PASS') valCls = 'val-pass-neutral';
+
+  const benchTxt = (m.lo === 0 && m.hi === 0) ? '—'
+                 : `${m.lo}-${Math.min(m.hi, 999)}${m.unit}`;
+
+  const selected = idx === selectedMetricI ? ' selected' : '';
+
+  return `<div class="metric-card${selected}" style="border-left-color:${borderCol}"
+              onclick="selectMetric(${idx})" data-metric-idx="${idx}">
+    <div class="metric-head">
+      <span class="m-name">${m.name}</span>
+      <span class="m-badge ${badgeCls}">${badgeTxt}</span>
+    </div>
+    <div class="m-val ${valCls}">${valStr}</div>
+    ${makeBar(m)}
+    <div class="m-bench">Benchmark: ${benchTxt}</div>
+    <div class="m-joints">&#9679; ${jnames(m.joints)}</div>
+    <div class="m-detail" id="mdetail-${idx}">Joint IDs: ${m.joints.join(', ')}</div>
+  </div>`;
+}
+
+function makeFaultCard(f, fi) {
+  const tags = f.confirmed.map(c => `<span class="conf-tag">${c}</span>`).join('');
+  const ico  = f.severity === 'critical' ? '&#128308;' : '&#128992;';
+  return `<div class="fault-card ${f.severity}" onclick="activateFault(${fi})">
+    <div class="fault-name">${ico} ${f.name}</div>
+    <div class="fault-meta">Detected ${f.detected} &middot; ${f.evidence}</div>
+    <div class="fault-desc">${f.desc}</div>
+    <div class="fault-confirmed">${tags}</div>
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RENDER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+function renderMetrics() {
+  const ms   = METRICS[currentPhase] || [];
+  document.getElementById('metrics-scroll').innerHTML = ms.map((m, i) => makeMetricCard(m, i)).join('');
+}
+
+function renderFaults() {
+  document.getElementById('fault-list').innerHTML =
+    FAULTS.map((f, i) => makeFaultCard(f, i)).join('');
+}
+
+function renderPhaseTabs() {
+  document.getElementById('phase-tabs').innerHTML = PHASE_ORDER.map(p => {
+    const active  = p === currentPhase;
+    const det     = PHASES[p].detected;
+    const col     = active ? `border-bottom-color:${PHASE_COLORS[p]}` : '';
+    const opacity = det ? '' : 'opacity:0.4;';
+    return `<button class="ptab${active ? ' active' : ''}" style="${col}${opacity}"
+                    onclick="selectPhase('${p}')">${p}</button>`;
+  }).join('');
+}
+
+function renderPhaseStrip() {
+  document.getElementById('phase-strip').innerHTML = PHASE_ORDER.map(p => {
+    const active  = p === currentPhase;
+    const det     = PHASES[p].detected;
+    const bg      = active ? `background:${PHASE_COLORS[p]};color:#fff` : '';
+    const opacity = det ? '' : 'opacity:0.4;';
+    const ts      = det ? PHASES[p].time.toFixed(2) + 's' : '—';
+    return `<button class="phase-btn${active ? ' active' : ''}"
+                    style="${bg}${opacity}"
+                    onclick="jumpToPhase('${p}')"
+                    title="${PHASES[p].label} (${ts})">
+              ${p}<br><span style="font-size:8px;opacity:.7">${PHASES[p].label}</span>
+            </button>`;
+  }).join('');
+}
+
+function renderPhaseTicksOnScrub() {
+  document.querySelectorAll('.phase-tick').forEach(el => el.remove());
+  const dur = video.duration;
+  if (!dur || !isFinite(dur)) return;
+  const track = document.getElementById('scrub-track');
+  PHASE_ORDER.forEach(p => {
+    if (!PHASES[p].detected) return;
+    const pct  = (PHASES[p].time / dur * 100).toFixed(2);
+    const tick = document.createElement('div');
+    tick.className = 'phase-tick';
+    tick.style.left       = pct + '%';
+    tick.style.background = PHASE_COLORS[p];
+    tick.title = `${p} ${PHASES[p].label} (${PHASES[p].time.toFixed(2)}s)`;
+    track.appendChild(tick);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE / METRIC SELECTION
+// ═══════════════════════════════════════════════════════════════════════════
+function selectPhase(p) {
+  currentPhase    = p;
+  selectedMetricI = -1;
+  renderMetrics();
+  renderPhaseTabs();
+  renderPhaseStrip();
+}
+
+function jumpToPhase(p) {
+  selectPhase(p);
+  if (video.src && PHASES[p].detected) {
+    video.currentTime = PHASES[p].time;
+    video.pause();
+    updatePlayBtn();
+  }
+}
+
+function selectMetric(idx) {
+  if (selectedMetricI === idx) {
+    selectedMetricI = -1;
+    document.querySelectorAll('.metric-card').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('.m-detail').forEach(d => d.classList.remove('open'));
+    return;
+  }
+  selectedMetricI = idx;
+  document.querySelectorAll('.metric-card').forEach(c => c.classList.remove('selected'));
+  document.querySelectorAll('.m-detail').forEach(d => d.classList.remove('open'));
+  const card   = document.querySelector(`[data-metric-idx="${idx}"]`);
+  const detail = document.getElementById(`mdetail-${idx}`);
+  if (card)   card.classList.add('selected');
+  if (detail) detail.classList.add('open');
+}
+
+function activateFault(fi) {
+  const f = FAULTS[fi];
+  jumpToPhase(f.detected);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VIDEO CONTROLS
+// ═══════════════════════════════════════════════════════════════════════════
+function togglePlay() {
+  if (!video.src) return;
+  video.paused ? video.play() : video.pause();
+}
+function updatePlayBtn() {
+  document.getElementById('btn-play').innerHTML = video.paused ? '&#9654;' : '&#9646;&#9646;';
+}
+function stepFrame(dir) {
+  if (!video.src) return;
+  video.pause(); updatePlayBtn();
+  video.currentTime = Math.max(0, Math.min(video.duration || 0,
+    video.currentTime + dir / FPS_DEFAULT));
+}
+function setSpeed(v) { video.playbackRate = parseFloat(v); }
+function toggleFullscreen() {
+  if (!document.fullscreenElement)
+    document.getElementById('center-panel').requestFullscreen();
+  else
+    document.exitFullscreen();
+}
+
+// Scrub bar
+const scrubTrack = document.getElementById('scrub-track');
+
+function scrubToEvent(e) {
+  const rect = scrubTrack.getBoundingClientRect();
+  const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  if (video.duration && isFinite(video.duration))
+    video.currentTime = pct * video.duration;
+}
+
+scrubTrack.addEventListener('mousedown', e => {
+  if (!video.src) return;
+  isScrubbing = true;
+  video.pause(); updatePlayBtn();
+  scrubToEvent(e);
+});
+document.addEventListener('mousemove', e => { if (isScrubbing) scrubToEvent(e); });
+document.addEventListener('mouseup',   () => { isScrubbing = false; });
+
+function updateScrub() {
+  const dur = video.duration;
+  if (!dur || !isFinite(dur)) return;
+  const pct = (video.currentTime / dur * 100).toFixed(2);
+  document.getElementById('scrub-fill').style.width = pct + '%';
+  document.getElementById('scrub-thumb').style.left = pct + '%';
+  document.getElementById('time-display').textContent =
+    fmtTime(video.currentTime) + ' / ' + fmtTime(dur);
+
+  const fr  = Math.round(video.currentTime * FPS_DEFAULT);
+  document.getElementById('fi-frame').textContent = fr;
+  document.getElementById('fi-time').textContent  = video.currentTime.toFixed(3) + 's';
+  const curP = getCurrentPhaseFromTime(video.currentTime);
+  document.getElementById('fi-phase').textContent = curP
+    ? `${curP} ${PHASES[curP].label}` : '—';
+}
+
+// Video events
+video.addEventListener('play',       updatePlayBtn);
+video.addEventListener('pause',      updatePlayBtn);
+video.addEventListener('timeupdate', () => { updateScrub(); drawLandmarks(); });
+video.addEventListener('seeked',     drawLandmarks);
+video.addEventListener('ended',      updatePlayBtn);
+
+video.addEventListener('loadedmetadata', () => {
+  document.getElementById('si-dur').textContent = fmtTime(video.duration);
+  document.getElementById('fi-fps').textContent = FPS_DEFAULT;
+  document.getElementById('si-res').textContent =
+    (video.videoWidth || '—') + 'x' + (video.videoHeight || '—');
+  document.getElementById('time-display').textContent =
+    '0:00.0 / ' + fmtTime(video.duration);
+  renderPhaseTicksOnScrub();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FILE INPUT / DRAG AND DROP
+// ═══════════════════════════════════════════════════════════════════════════
+const fileInput  = document.getElementById('file-input');
+const uploadZone = document.getElementById('upload-zone');
+
+fileInput.addEventListener('change', function () {
+  if (this.files.length > 0) uploadVideo(this.files[0]);
+  this.value = '';
+});
+
+uploadZone.addEventListener('dragover',  e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  const files = e.dataTransfer.files;
+  if (files.length > 0) uploadVideo(files[0]);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// KEYBOARD SHORTCUTS
+// ═══════════════════════════════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)) return;
+  if (e.code === 'Space') {
+    e.preventDefault(); togglePlay();
+  } else if (e.code === 'ArrowLeft') {
+    e.preventDefault(); stepFrame(-1);
+  } else if (e.code === 'ArrowRight') {
+    e.preventDefault(); stepFrame(1);
+  } else if (e.key >= '1' && e.key <= '7') {
+    const p = 'P' + e.key;
+    if (PHASES[p]) jumpToPhase(p);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════════════════
+renderPhaseTabs();
+renderPhaseStrip();
+renderMetrics();
+renderFaults();
+</script>
+</body>
+</html>

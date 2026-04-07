@@ -1,0 +1,21 @@
+# Large binary / local data
+*.mp4
+*.mov
+*.task
+*.xlsx
+swing_data*.json
+*.pyc
+__pycache__/
+chip_render_debug.html
+.claude/
+
+# Local analysis scripts
+p1p7_report.py
+p1p7_v2.py
+overlay_landmarks.py
+extract_and_render_v2.py
+fill_metrics.py
+mediapipe_test.py
+swing_analysis_v3.py
+swing_analysis_v4.py
+dtl_male/
