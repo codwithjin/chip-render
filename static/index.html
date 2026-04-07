@@ -940,7 +940,27 @@ async function pollJob(job_id) {
       setStatus('Loading results...');
       setProgress(100, 'Fetching landmark data...');
       const res = await fetch('/result/' + job_id);
-      return res.json();
+
+      if (!res.ok) {
+        throw new Error(`Result fetch failed: ${res.status} ${res.statusText}`);
+      }
+
+      const text = await res.text();
+      console.log('Result response length:', text.length);
+      console.log('Result first 200 chars:', text.substring(0, 200));
+
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch (e) {
+        throw new Error(`JSON parse failed: ${e.message}. Response: ${text.substring(0, 100)}`);
+      }
+
+      if (!parsed || !parsed.frames) {
+        throw new Error(`Invalid response structure. Keys: ${Object.keys(parsed || {})}`);
+      }
+
+      return parsed;
     }
   }
 }
@@ -1011,9 +1031,17 @@ async function uploadVideo(file) {
     const phaseData = await phaseResp.json();
     updatePhases(phaseData, landmarkData.fps || 30);
 
-    // ── Load video ──
-    video.src = URL.createObjectURL(file);
-    video.load();
+    // ── Load video and wait for metadata ──
+    const videoURL = URL.createObjectURL(file);
+    video.src = videoURL;
+
+    await new Promise((resolve, reject) => {
+      video.addEventListener('loadedmetadata', resolve, { once: true });
+      video.addEventListener('error', reject, { once: true });
+      video.load();
+    });
+
+    console.log('Video loaded:', video.videoWidth, 'x', video.videoHeight, video.duration + 's');
 
     document.getElementById('main-video').style.display  = '';
     document.getElementById('no-video-msg').style.display = 'none';
@@ -1032,6 +1060,9 @@ async function uploadVideo(file) {
     renderMetrics();
 
   } catch (err) {
+    console.error('Upload pipeline error:', err);
+    hideUploadProgress();
+    setStatus('Error: ' + err.message);
     showError(err.message || 'Unknown error');
   }
 }
@@ -1055,7 +1086,13 @@ function updatePhases(data, fps) {
 function buildFrameLookup(data) {
   frameLookup    = {};
   poseFrameCount = 0;
-  videoFps       = data.fps || 30;
+
+  if (!data || !data.frames) {
+    console.error('buildFrameLookup: invalid data', data);
+    return;
+  }
+
+  videoFps = data.fps || 30;
 
   data.frames.forEach(f => {
     if (f.poses && f.poses.length > 0 && f.poses[0].landmarks_2d) {
@@ -1064,8 +1101,16 @@ function buildFrameLookup(data) {
     }
   });
 
-  document.getElementById('landmarkCanvas').style.display = '';
   console.log('Loaded', poseFrameCount, 'pose frames at', videoFps, 'fps');
+
+  if (poseFrameCount === 0) {
+    console.warn('No pose frames found. Check landmarks_2d key exists.');
+    if (data.frames.length > 0) {
+      console.log('First frame structure:', JSON.stringify(data.frames[0]).substring(0, 300));
+    }
+  }
+
+  document.getElementById('landmarkCanvas').style.display = '';
 }
 
 function toggleLandmarks() {

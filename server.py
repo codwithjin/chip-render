@@ -89,6 +89,9 @@ def process_video():
 
 def run_mediapipe(video_path, job_id):
     try:
+        print(f"[MediaPipe] Starting job {job_id}", flush=True)
+        print(f"[MediaPipe] Video: {video_path}", flush=True)
+
         mp_pose = mp.solutions.pose
         pose = mp_pose.Pose(
             static_image_mode=False,
@@ -103,6 +106,8 @@ def run_mediapipe(video_path, job_id):
         total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        print(f"[MediaPipe] FPS:{fps} Frames:{total} Size:{width}x{height}", flush=True)
 
         with jobs_lock:
             jobs[job_id]['total'] = total
@@ -165,11 +170,17 @@ def run_mediapipe(video_path, job_id):
             'frames':       frames_out,
         }
 
+        pose_frame_count = sum(1 for f in frames_out if f['poses'])
+        print(f"[MediaPipe] Done. Pose frames: {pose_frame_count}/{frame_num}", flush=True)
+
         with jobs_lock:
             jobs[job_id]['status'] = 'done'
             jobs[job_id]['result'] = result
 
     except Exception as e:
+        import traceback
+        print(f"[MediaPipe] ERROR: {e}", flush=True)
+        traceback.print_exc()
         with jobs_lock:
             jobs[job_id]['status'] = 'error'
             jobs[job_id]['error']  = str(e)
@@ -199,6 +210,7 @@ def get_progress(job_id):
 def get_result(job_id):
     with jobs_lock:
         job = jobs.get(job_id)
+    print(f"[Result] job_id={job_id} status={job.get('status') if job else 'NOT_FOUND'} result_is_none={job['result'] is None if job else 'N/A'}", flush=True)
     if not job or job['status'] != 'done':
         return jsonify({'error': 'Not ready'}), 404
 
