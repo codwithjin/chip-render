@@ -3,7 +3,11 @@ from flask import (Flask, request, jsonify,
 import cv2, mediapipe as mp, json, math
 import os, tempfile, threading, uuid, time
 
-app = Flask(__name__, static_folder='static')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask(__name__,
+            static_folder=os.path.join(BASE_DIR, 'static'),
+            static_url_path='/static')
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB
 
 JOINT_IDS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
@@ -30,7 +34,7 @@ cleaner.start()
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
-    return send_from_directory('static', 'index.html')
+    return send_from_directory(os.path.join(BASE_DIR, 'static'), 'index.html')
 
 
 @app.route('/health')
