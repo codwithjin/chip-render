@@ -22,8 +22,5 @@ COPY . .
 # Expose port
 EXPOSE 8080
 
-# Start gunicorn
-CMD gunicorn server:app \
-    --workers 2 \
-    --timeout 300 \
-    --bind 0.0.0.0:$PORT
+# Start gunicorn — shell form so $PORT expands correctly
+CMD ["sh", "-c", "gunicorn server:app --workers 2 --timeout 300 --bind 0.0.0.0:${PORT:-8080}"]

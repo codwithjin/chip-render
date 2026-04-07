@@ -42,6 +42,11 @@ def health():
     return jsonify({'status': 'ok'})
 
 
+@app.route('/ping')
+def ping():
+    return 'pong', 200
+
+
 @app.route('/process', methods=['POST'])
 def process_video():
     if 'video' not in request.files:
