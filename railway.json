@@ -1,11 +1,10 @@
 {
   "$schema": "https://railway.app/railway-schema.json",
   "build": {
-    "builder": "NIXPACKS",
-    "buildCommand": "apt-get update && apt-get install -y libgl1 libglib2.0-0 && pip install -r requirements.txt"
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "gunicorn server:app --workers 2 --timeout 300 --bind 0.0.0.0:$PORT",
     "healthcheckPath": "/health",
     "restartPolicyType": "ON_FAILURE"
   }
