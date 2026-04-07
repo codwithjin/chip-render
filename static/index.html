@@ -1145,91 +1145,148 @@ const BONES_CANVAS = [
 ];
 const JOINT_IDS_CANVAS = [0,11,12,13,14,15,16,23,24,25,26,27,28];
 
-function getVideoRect(canvas) {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  const cw = canvas.width;
-  const ch = canvas.height;
-  if (!vw || !vh) return { x: 0, y: 0, w: cw, h: ch };
-  const vAsp = vw / vh;
-  const cAsp = cw / ch;
-  if (vAsp > cAsp) {
-    const h = cw / vAsp;
-    return { x: 0, y: (ch - h) / 2, w: cw, h };
-  } else {
-    const w = ch * vAsp;
-    return { x: (cw - w) / 2, y: 0, w, h: ch };
-  }
-}
-
-function toPixel(lm, rect) {
-  return { x: rect.x + lm.x * rect.w, y: rect.y + lm.y * rect.h };
-}
-
 function drawLandmarks() {
   const canvas = document.getElementById('landmarkCanvas');
   const ctx    = canvas.getContext('2d');
 
-  const rect   = canvas.getBoundingClientRect();
-  canvas.width  = rect.width;
-  canvas.height = rect.height;
+  // Canvas must match the video element's CSS display size
+  const displayRect = video.getBoundingClientRect();
+  canvas.width  = displayRect.width;
+  canvas.height = displayRect.height;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  if (!landmarksOn || !poseFrameCount) return;
+  if (!landmarksOn) return;
+  if (!Object.keys(frameLookup).length) return;
 
   const currentFrame = Math.round(video.currentTime * videoFps);
-  const pose = frameLookup[currentFrame];
-  if (!pose) return;
 
-  const lm2d = pose.landmarks_2d;
-  const lm3d = pose.landmarks_3d;
+  // Try exact frame then adjacent frames (±3)
+  let resolvedPose = frameLookup[currentFrame];
+  if (!resolvedPose) {
+    for (let delta = 1; delta <= 3; delta++) {
+      resolvedPose = frameLookup[currentFrame + delta]
+                  || frameLookup[currentFrame - delta];
+      if (resolvedPose) break;
+    }
+  }
+  if (!resolvedPose) return;
+
+  const lm2d = resolvedPose.landmarks_2d;
+  const lm3d = resolvedPose.landmarks_3d;
   if (!lm2d) return;
 
-  const vRect = getVideoRect(canvas);
+  // Compute actual video render rect within canvas
+  // accounting for object-fit: contain letterboxing
+  const natW = video.videoWidth;
+  const natH = video.videoHeight;
+  const canW = canvas.width;
+  const canH = canvas.height;
 
-  function zRadius(id) {
-    const l3 = lm3d && lm3d[String(id)];
-    if (!l3) return 5;
-    const zNorm = Math.max(0, Math.min(1, (l3.z + 0.3) / 0.6));
-    return Math.round(3 + zNorm * 7);
+  let renderW, renderH, offsetX, offsetY;
+
+  if (!natW || !natH) {
+    renderW = canW; renderH = canH;
+    offsetX = 0;    offsetY = 0;
+  } else {
+    const natAspect = natW / natH;
+    const canAspect = canW / canH;
+
+    if (natAspect > canAspect) {
+      // Video wider than canvas — bars top/bottom
+      renderW = canW;
+      renderH = canW / natAspect;
+      offsetX = 0;
+      offsetY = (canH - renderH) / 2;
+    } else {
+      // Video taller than canvas — bars left/right (portrait video case)
+      renderH = canH;
+      renderW = canH * natAspect;
+      offsetX = (canW - renderW) / 2;
+      offsetY = 0;
+    }
   }
 
+  console.log('Canvas:', canW, 'x', canH, '| Natural:', natW, 'x', natH,
+              '| Render:', renderW.toFixed(0), 'x', renderH.toFixed(0),
+              '| Offset:', offsetX.toFixed(0), offsetY.toFixed(0));
+
+  function toPixel(lm) {
+    return { x: offsetX + lm.x * renderW, y: offsetY + lm.y * renderH };
+  }
+
+  function zRadius(jointId) {
+    const l3 = lm3d && lm3d[String(jointId)];
+    if (!l3) return 5;
+    const zn = Math.max(0, Math.min(1, (l3.z + 0.3) / 0.6));
+    return Math.round(3 + zn * 7);
+  }
+
+  // Draw nose as a sanity-check circle
+  const nose = lm2d['0'];
+  if (nose) {
+    const np = toPixel(nose);
+    ctx.beginPath();
+    ctx.arc(np.x, np.y, 12, 0, Math.PI * 2);
+    ctx.fillStyle   = '#ffffff';
+    ctx.globalAlpha = 0.9;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    console.log('Nose pixel:', np.x.toFixed(0), np.y.toFixed(0),
+                '| norm:', nose.x.toFixed(3), nose.y.toFixed(3));
+  }
+
+  const JOINT_COLORS = {
+    0:  '#c8c0b0',
+    11: '#4a8eff', 13: '#4a8eff', 15: '#4a8eff',
+    23: '#4a8eff', 25: '#4a8eff', 27: '#4a8eff',
+    12: '#b7410e', 14: '#b7410e', 16: '#b7410e',
+    24: '#b7410e', 26: '#b7410e', 28: '#b7410e',
+  };
+
+  const BONES = [
+    [11,12,'#c8c0b0'], [23,24,'#c8c0b0'],
+    [11,23,'#c8c0b0'], [12,24,'#c8c0b0'],
+    [0,11,'#c8c0b0'],  [0,12,'#c8c0b0'],
+    [11,13,'#4a8eff'], [13,15,'#4a8eff'],
+    [12,14,'#b7410e'], [14,16,'#b7410e'],
+    [23,25,'#4a8eff'], [25,27,'#4a8eff'],
+    [24,26,'#b7410e'], [26,28,'#b7410e'],
+  ];
+
+  const JOINT_IDS = [0,11,12,13,14,15,16,23,24,25,26,27,28];
+
   // Draw bones
-  BONES_CANVAS.forEach(([a, b, color]) => {
+  ctx.lineWidth = 2;
+  BONES.forEach(([a, b, color]) => {
     const la = lm2d[String(a)];
     const lb = lm2d[String(b)];
     if (!la || !lb) return;
     const minVis = Math.min(la.visibility, lb.visibility);
     if (minVis < 0.15) return;
-    const pa = toPixel(la, vRect);
-    const pb = toPixel(lb, vRect);
+    const pa = toPixel(la);
+    const pb = toPixel(lb);
     ctx.beginPath();
     ctx.moveTo(pa.x, pa.y);
     ctx.lineTo(pb.x, pb.y);
-    ctx.strokeStyle  = color;
-    ctx.globalAlpha  = Math.min(1, 0.25 + minVis * 0.75);
-    ctx.lineWidth    = minVis > 0.5 ? 2 : 1;
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.2 + minVis * 0.8;
     ctx.stroke();
-    ctx.globalAlpha  = 1;
+    ctx.globalAlpha = 1;
   });
 
   // Draw joints
-  JOINT_IDS_CANVAS.forEach(id => {
+  JOINT_IDS.forEach(id => {
     const lm = lm2d[String(id)];
     if (!lm || lm.visibility < 0.15) return;
-    const p     = toPixel(lm, vRect);
+    const p     = toPixel(lm);
     const r     = zRadius(id);
-    const color = JOINT_COLORS_CANVAS[id] || '#ffffff';
+    const color = JOINT_COLORS[id] || '#ffffff';
     ctx.beginPath();
     ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    if (lm.visibility >= 0.5) {
+    if (lm.visibility >= 0.4) {
       ctx.fillStyle   = color;
-      ctx.globalAlpha = Math.min(1, 0.55 + lm.visibility * 0.45);
+      ctx.globalAlpha = 0.4 + lm.visibility * 0.6;
       ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
-      ctx.lineWidth   = 1;
-      ctx.globalAlpha = 0.6;
-      ctx.stroke();
     } else {
       ctx.strokeStyle = color;
       ctx.lineWidth   = 1.5;
@@ -1485,10 +1542,11 @@ function updateScrub() {
 // Video events
 video.addEventListener('play',       updatePlayBtn);
 video.addEventListener('pause',      updatePlayBtn);
-video.addEventListener('timeupdate', () => { updateScrub(); drawLandmarks(); });
-video.addEventListener('seeked',     drawLandmarks);
+video.addEventListener('timeupdate', updateScrub);
+// drawLandmarks is driven by the RAF loop — see loadedmetadata handler
 video.addEventListener('ended',      updatePlayBtn);
 
+let rafStarted = false;
 video.addEventListener('loadedmetadata', () => {
   document.getElementById('si-dur').textContent = fmtTime(video.duration);
   document.getElementById('fi-fps').textContent = FPS_DEFAULT;
@@ -1497,6 +1555,16 @@ video.addEventListener('loadedmetadata', () => {
   document.getElementById('time-display').textContent =
     '0:00.0 / ' + fmtTime(video.duration);
   renderPhaseTicksOnScrub();
+
+  // Start continuous RAF render loop (only once)
+  if (!rafStarted) {
+    rafStarted = true;
+    function renderLoop() {
+      drawLandmarks();
+      requestAnimationFrame(renderLoop);
+    }
+    requestAnimationFrame(renderLoop);
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
