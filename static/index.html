@@ -1146,7 +1146,10 @@ const BONES_CANVAS = [
 const JOINT_IDS_CANVAS = [0,11,12,13,14,15,16,23,24,25,26,27,28];
 
 function drawLandmarks() {
+  try {
   const canvas = document.getElementById('landmarkCanvas');
+  console.log('Canvas element:', canvas, '| Video element:', video);
+
   const ctx    = canvas.getContext('2d');
 
   // Canvas must match the video element's CSS display size
@@ -1154,6 +1157,10 @@ function drawLandmarks() {
   canvas.width  = displayRect.width;
   canvas.height = displayRect.height;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  console.log('landmarksOn:', landmarksOn,
+              '| frameLookup size:', Object.keys(frameLookup).length,
+              '| canvas size:', canvas.width, 'x', canvas.height);
 
   if (!landmarksOn) return;
   if (!Object.keys(frameLookup).length) return;
@@ -1295,6 +1302,9 @@ function drawLandmarks() {
     }
     ctx.globalAlpha = 1;
   });
+  } catch(err) {
+    console.error('drawLandmarks crashed:', err);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1546,8 +1556,11 @@ video.addEventListener('timeupdate', updateScrub);
 // drawLandmarks is driven by the RAF loop — see loadedmetadata handler
 video.addEventListener('ended',      updatePlayBtn);
 
-let rafStarted = false;
 video.addEventListener('loadedmetadata', () => {
+  console.log('Video metadata loaded:',
+              video.videoWidth, 'x', video.videoHeight,
+              'duration:', video.duration);
+
   document.getElementById('si-dur').textContent = fmtTime(video.duration);
   document.getElementById('fi-fps').textContent = FPS_DEFAULT;
   document.getElementById('si-res').textContent =
@@ -1556,16 +1569,13 @@ video.addEventListener('loadedmetadata', () => {
     '0:00.0 / ' + fmtTime(video.duration);
   renderPhaseTicksOnScrub();
 
-  // Start continuous RAF render loop (only once)
-  if (!rafStarted) {
-    rafStarted = true;
-    function renderLoop() {
-      drawLandmarks();
-      requestAnimationFrame(renderLoop);
-    }
+  console.log('Starting RAF render loop');
+  function renderLoop() {
+    drawLandmarks();
     requestAnimationFrame(renderLoop);
   }
-});
+  requestAnimationFrame(renderLoop);
+}, { once: true });
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FILE INPUT / DRAG AND DROP
