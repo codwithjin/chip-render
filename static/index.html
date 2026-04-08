@@ -1599,7 +1599,7 @@ video.addEventListener('timeupdate', function() {
       triggeredFrames.add(ff);
       let phaseName = '';
       let phaseKey  = '';
-      for (const [key, data] of Object.entries(PHASES)) {
+      for (const [key, data] of Object.entries(phases || {})) {
         if (data.frame === ff) {
           phaseKey  = key;
           phaseName = key + ' · ' + (data.label || '');
