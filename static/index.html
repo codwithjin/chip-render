@@ -872,6 +872,7 @@ let freezeFrames    = new Set();
 let triggeredFrames = new Set();
 let isFrozen        = false;
 let freezeActive    = false;
+let phases          = {};
 
 const video = document.getElementById('main-video');
 const FPS_DEFAULT = 30;
@@ -984,10 +985,12 @@ async function uploadVideo(file) {
     return;
   }
 
+  phases = {};
   freezeFrames.clear();
   triggeredFrames.clear();
   freezeActive = false;
   isFrozen     = false;
+  updateActivePhase('P1');
 
   showUploadProgress();
   setStatus('Uploading...');
@@ -1050,8 +1053,8 @@ async function uploadVideo(file) {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ frames: landmarkData.frames, fps: landmarkData.fps }),
     });
-    const phaseData = await phaseResp.json();
-    updatePhases(phaseData, landmarkData.fps || 30);
+    phases = await phaseResp.json();
+    updatePhases(phases, landmarkData.fps || 30);
 
     freezeFrames.clear();
     triggeredFrames.clear();
@@ -1480,6 +1483,10 @@ function selectPhase(p) {
   renderPhaseStrip();
 }
 
+function updateActivePhase(phaseKey) {
+  selectPhase(phaseKey);
+}
+
 function jumpToPhase(p) {
   selectPhase(p);
   if (video.src && PHASES[p].detected) {
@@ -1579,10 +1586,24 @@ video.addEventListener('ended',      updatePlayBtn);
 
 video.addEventListener('timeupdate', function() {
   if (freezeActive) return;
-  if (freezeFrames.size === 0) return;
   if (video.paused) return;
 
   const currentFrame = Math.round(video.currentTime * videoFps);
+
+  // Track active phase from playback position
+  const phaseOrder = ['P1','P3','P4','P5','P7'];
+  let currentPhaseKey = 'P1';
+  for (let i = phaseOrder.length - 1; i >= 0; i--) {
+    const key = phaseOrder[i];
+    if (phases[key] && phases[key].frame !== null &&
+        currentFrame >= phases[key].frame) {
+      currentPhaseKey = key;
+      break;
+    }
+  }
+  updateActivePhase(currentPhaseKey);
+
+  if (freezeFrames.size === 0) return;
 
   for (const ff of freezeFrames) {
     if (Math.abs(currentFrame - ff) <= 1 &&
@@ -1606,6 +1627,7 @@ video.addEventListener('timeupdate', function() {
 async function doFreeze(phaseName, phaseKey) {
   freezeActive = true;
   isFrozen     = true;
+  if (phaseKey) updateActivePhase(phaseKey);
   video.pause();
   await new Promise(r => setTimeout(r, 3000));
   video.play();
