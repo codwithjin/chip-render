@@ -1297,6 +1297,19 @@ function drawLandmarks() {
     }
     ctx.globalAlpha = 1;
   });
+
+  // TEST MARKER — remove after confirming
+  const nose = lm2d['0'];
+  if (nose) {
+    const np = toPixel(nose);
+    ctx.beginPath();
+    ctx.arc(np.x, np.y, 30, 0, Math.PI * 2);
+    ctx.fillStyle   = '#ff0000';
+    ctx.globalAlpha = 1.0;
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+  }
+
   } catch(err) {
     console.error('drawLandmarks crashed:', err);
   }
