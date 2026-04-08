@@ -1299,9 +1299,9 @@ function drawLandmarks() {
   });
 
   // TEST MARKER — remove after confirming
-  const nose = lm2d['0'];
-  if (nose) {
-    const np = toPixel(nose);
+  const testNose = lm2d['0'];
+  if (testNose) {
+    const np = toPixel(testNose);
     ctx.beginPath();
     ctx.arc(np.x, np.y, 30, 0, Math.PI * 2);
     ctx.fillStyle   = '#ff0000';
