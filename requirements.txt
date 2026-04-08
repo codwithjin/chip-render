@@ -4,3 +4,4 @@ mediapipe==0.10.9
 opencv-python-headless==4.9.0.80
 numpy==1.26.4
 werkzeug==3.0.1
+psycopg2-binary==2.9.9

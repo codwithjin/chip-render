@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install system dependencies at runtime layer
+# System deps for MediaPipe + Node for React build
 RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
@@ -8,19 +8,25 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libgomp1 \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python dependencies
+# Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application
+# React build
+COPY frontend/package*.json frontend/
+RUN cd frontend && npm ci
+COPY frontend/ frontend/
+RUN cd frontend && npm run build
+
+# Copy rest of application
 COPY . .
 
-# Expose port
 EXPOSE 8080
 
-# Start gunicorn — shell form so $PORT expands correctly
 CMD ["sh", "-c", "gunicorn server:app --workers 2 --timeout 300 --bind 0.0.0.0:${PORT:-8080}"]

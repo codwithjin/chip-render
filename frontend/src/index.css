@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0e0b; color: #d4d0c8; font-family: 'Courier New', monospace; }
+#root { width: 100%; height: 100vh; overflow: hidden; }

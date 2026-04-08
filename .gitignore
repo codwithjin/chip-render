@@ -19,3 +19,9 @@ mediapipe_test.py
 swing_analysis_v3.py
 swing_analysis_v4.py
 dtl_male/
+
+# React build output (built in Docker on Railway)
+static_react/
+
+# Node modules
+frontend/node_modules/

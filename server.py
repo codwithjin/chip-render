@@ -3,12 +3,20 @@ from flask import (Flask, request, jsonify,
 import cv2, mediapipe as mp, json, math
 import os, tempfile, threading, uuid, time
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
+REACT_BUILD_DIR = os.path.join(BASE_DIR, 'static_react')
 
-app = Flask(__name__,
-            static_folder=os.path.join(BASE_DIR, 'static'),
-            static_url_path='/static')
+# Serve React build if it exists, otherwise fall back to old static folder
+_static_folder = REACT_BUILD_DIR if os.path.isdir(REACT_BUILD_DIR) else os.path.join(BASE_DIR, 'static')
+
+app = Flask(__name__, static_folder=_static_folder, static_url_path='')
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB
+
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+def get_db():
+    import psycopg2
+    return psycopg2.connect(DATABASE_URL)
 
 JOINT_IDS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 MAX_FILE_MB = 500
@@ -375,6 +383,95 @@ def detect_phases():
         'P7': pr('Impact',     p7_frame, p7_idx),
         'freeze_frames': freeze_frames,
     })
+
+
+# ── React SPA fallback ────────────────────────────────────────────────────────
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_react(path):
+    full = os.path.join(_static_folder, path)
+    if path and os.path.exists(full):
+        return send_from_directory(_static_folder, path)
+    return send_from_directory(_static_folder, 'index.html')
+
+
+# ── Sessions API ──────────────────────────────────────────────────────────────
+@app.route('/api/sessions', methods=['POST'])
+def create_session():
+    if not DATABASE_URL:
+        return jsonify({'error': 'No database configured'}), 503
+    data = request.json
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO swing_sessions
+        (golfer_name, video_filename, fps, total_frames, phases, metrics)
+        VALUES (%s,%s,%s,%s,%s,%s) RETURNING id
+    """, (
+        data.get('golfer_name', ''),
+        data.get('video_filename', ''),
+        data.get('fps', 30),
+        data.get('total_frames', 0),
+        json.dumps(data.get('phases', {})),
+        json.dumps(data.get('metrics', {})),
+    ))
+    session_id = cur.fetchone()[0]
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({'id': str(session_id)})
+
+
+@app.route('/api/sessions', methods=['GET'])
+def get_sessions():
+    if not DATABASE_URL:
+        return jsonify([])
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+        SELECT id, golfer_name, video_filename, created_at
+        FROM swing_sessions ORDER BY created_at DESC LIMIT 50
+    """)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify([{
+        'id': str(r[0]), 'golfer_name': r[1],
+        'video_filename': r[2], 'created_at': str(r[3]),
+    } for r in rows])
+
+
+# ── Notes API ─────────────────────────────────────────────────────────────────
+@app.route('/api/notes', methods=['POST'])
+def save_note():
+    if not DATABASE_URL:
+        return jsonify({'error': 'No database configured'}), 503
+    data = request.json
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO swing_notes
+        (session_id, phase_key, note_text, note_type, screenshot_url)
+        VALUES (%s,%s,%s,%s,%s) RETURNING id, created_at
+    """, (
+        data['session_id'], data.get('phase_key'),
+        data.get('note_text', ''), data.get('note_type', 'text'),
+        data.get('screenshot_url'),
+    ))
+    row = cur.fetchone()
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({**data, 'id': str(row[0]), 'created_at': str(row[1])})
+
+
+@app.route('/api/notes/<session_id>', methods=['GET'])
+def get_notes(session_id):
+    if not DATABASE_URL:
+        return jsonify([])
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+        SELECT id, phase_key, note_text, note_type, screenshot_url, created_at
+        FROM swing_notes WHERE session_id=%s ORDER BY created_at
+    """, (session_id,))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify([{
+        'id': str(r[0]), 'phase_key': r[1], 'note_text': r[2],
+        'note_type': r[3], 'screenshot_url': r[4], 'created_at': str(r[5]),
+    } for r in rows])
 
 
 if __name__ == '__main__':
