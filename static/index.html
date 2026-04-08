@@ -1031,17 +1031,10 @@ async function uploadVideo(file) {
     const phaseData = await phaseResp.json();
     updatePhases(phaseData, landmarkData.fps || 30);
 
-    // ── Load video and wait for metadata ──
+    // ── Load video ──
     const videoURL = URL.createObjectURL(file);
     video.src = videoURL;
-
-    await new Promise((resolve, reject) => {
-      video.addEventListener('loadedmetadata', resolve, { once: true });
-      video.addEventListener('error', reject, { once: true });
-      video.load();
-    });
-
-    console.log('Video loaded:', video.videoWidth, 'x', video.videoHeight, video.duration + 's');
+    video.load();
 
     document.getElementById('main-video').style.display  = '';
     document.getElementById('no-video-msg').style.display = 'none';
