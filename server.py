@@ -1,7 +1,11 @@
 from flask import (Flask, request, jsonify,
                    send_from_directory, Response)
-import cv2, mediapipe as mp, json, math
+import cv2, json, math
 import os, tempfile, threading, uuid, time
+import mediapipe as mp
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision as mp_vision
+from ultralytics import YOLO
 
 BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
 REACT_BUILD_DIR = os.path.join(BASE_DIR, 'static_react')
@@ -22,6 +26,14 @@ JOINT_IDS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 MAX_FILE_MB = 500
 jobs = {}           # job_id → job dict
 jobs_lock = threading.Lock()
+
+YOLO_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'golf_club_v1_best.pt')
+yolo_model = None
+if os.path.exists(YOLO_MODEL_PATH):
+    yolo_model = YOLO(YOLO_MODEL_PATH)
+    print(f"[YOLO] Club head model loaded: {YOLO_MODEL_PATH}")
+else:
+    print(f"[YOLO] Model not found at {YOLO_MODEL_PATH}")
 
 
 # ── Job cleanup ───────────────────────────────────────────────────────────────
@@ -100,14 +112,14 @@ def run_mediapipe(video_path, job_id):
         print(f"[MediaPipe] Starting job {job_id}", flush=True)
         print(f"[MediaPipe] Video: {video_path}", flush=True)
 
-        mp_pose = mp.solutions.pose
-        pose = mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=2,
-            smooth_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
+        model_path = os.path.join(BASE_DIR, 'pose_landmarker_heavy.task')
+        base_options = mp_python.BaseOptions(model_asset_path=model_path)
+        options = mp_vision.PoseLandmarkerOptions(
+            base_options=base_options,
+            output_segmentation_masks=False,
+            num_poses=1,
         )
+        landmarker = mp_vision.PoseLandmarker.create_from_options(options)
 
         cap    = cv2.VideoCapture(video_path)
         fps    = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -128,8 +140,9 @@ def run_mediapipe(video_path, job_id):
             if not ret:
                 break
 
-            rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(rgb)
+            rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result   = landmarker.detect(mp_image)
 
             fd = {
                 'frame':        frame_num,
@@ -137,15 +150,15 @@ def run_mediapipe(video_path, job_id):
                 'poses':        [],
             }
 
-            if results.pose_landmarks and results.pose_world_landmarks:
+            if result.pose_landmarks and result.pose_world_landmarks:
                 entry = {
                     'pose_index':   0,
                     'landmarks_2d': {},
                     'landmarks_3d': {},
                 }
                 for jid in JOINT_IDS:
-                    lm2 = results.pose_landmarks.landmark[jid]
-                    lm3 = results.pose_world_landmarks.landmark[jid]
+                    lm2 = result.pose_landmarks[0][jid]
+                    lm3 = result.pose_world_landmarks[0][jid]
                     entry['landmarks_2d'][str(jid)] = {
                         'x':          round(lm2.x, 6),
                         'y':          round(lm2.y, 6),
@@ -160,6 +173,32 @@ def run_mediapipe(video_path, job_id):
                     }
                 fd['poses'].append(entry)
 
+            # YOLO club head detection
+            club_head = None
+            if yolo_model is not None:
+                try:
+                    yolo_results = yolo_model(
+                        frame,
+                        verbose=False,
+                        conf=0.25
+                    )
+                    if yolo_results and len(yolo_results[0].boxes):
+                        box = yolo_results[0].boxes[0]
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        cx = (x1 + x2) / 2
+                        cy = (y1 + y2) / 2
+                        club_head = {
+                            'x': cx / width,
+                            'y': cy / height,
+                            'x_px': cx,
+                            'y_px': cy,
+                            'conf': float(box.conf[0])
+                        }
+                except Exception as e:
+                    pass
+
+            fd['club_head'] = club_head
+
             frames_out.append(fd)
             frame_num += 1
 
@@ -167,7 +206,7 @@ def run_mediapipe(video_path, job_id):
                 jobs[job_id]['progress'] = frame_num
 
         cap.release()
-        pose.close()
+        landmarker.close()
 
         result = {
             'fps':          fps,
@@ -243,6 +282,14 @@ def detect_phases():
     if not pose_frames:
         return jsonify({'error': 'No pose frames'}), 400
 
+    club_lookup = {}
+    for f in frames:
+        if f.get('club_head'):
+            club_lookup[f['frame']] = f['club_head']
+
+    print(f"[PHASES] Club head detected in "
+          f"{len(club_lookup)}/{len(frames)} frames")
+
     def lm3(frame, jid):
         try:
             return frame['poses'][0]['landmarks_3d'][str(jid)]
@@ -257,6 +304,26 @@ def detect_phases():
 
     def dist3d(a, b):
         return math.sqrt(sum((a[k] - b[k]) ** 2 for k in ['x', 'y', 'z']))
+
+    def angle_3pt(ja, jb, jc):
+        ba = {k: ja[k] - jb[k] for k in ['x', 'y', 'z']}
+        bc = {k: jc[k] - jb[k] for k in ['x', 'y', 'z']}
+        dot    = sum(ba[k] * bc[k] for k in ['x', 'y', 'z'])
+        mag_ba = math.sqrt(sum(ba[k] ** 2 for k in ['x', 'y', 'z']))
+        mag_bc = math.sqrt(sum(bc[k] ** 2 for k in ['x', 'y', 'z']))
+        if mag_ba * mag_bc == 0:
+            return None
+        return math.degrees(math.acos(max(-1, min(1, dot / (mag_ba * mag_bc)))))
+
+    def angle_3pt_lm(frame, a, b, c):
+        try:
+            lm3d = frame['poses'][0]['landmarks_3d']
+            ja = lm3d.get(str(a)); jb = lm3d.get(str(b)); jc = lm3d.get(str(c))
+            if not all([ja, jb, jc]):
+                return None
+            return angle_3pt(ja, jb, jc)
+        except Exception:
+            return None
 
     # Trail wrist Y series (joint 16)
     rw = [
@@ -278,11 +345,17 @@ def detect_phases():
             p1_idx   = rw[i][0]
             break
 
-    lh1       = lm3(p1_frame, 23)
-    rh1       = lm3(p1_frame, 24)
+    lh1        = lm3(p1_frame, 23)
+    rh1        = lm3(p1_frame, 24)
     hip_rot_p1 = rot_xz(lh1, rh1) if lh1 and rh1 else 0
-    rw_y_p1   = rw[0][1]
-    post_p1   = [(fi, wy, fr) for fi, wy, fr in rw if fi > p1_idx]
+
+    lm_ls_p1      = lm3(p1_frame, 11)
+    lm_rs_p1      = lm3(p1_frame, 12)
+    shoulder_rot_p1 = rot_xz(lm_ls_p1, lm_rs_p1) if lm_ls_p1 and lm_rs_p1 else 0
+
+    p1_rw_y = next((wy for fi, wy, fr in rw if fi == p1_idx), rw[0][1])
+    rw_y_p1 = rw[0][1]
+    post_p1 = [(fi, wy, fr) for fi, wy, fr in rw if fi > p1_idx]
 
     # P2 — hip rotation > 5°
     p2_frame = p2_idx = None
@@ -294,43 +367,127 @@ def detect_phases():
             p2_idx   = fi
             break
 
-    # P3 — wrist crosses hip Y upward
-    p3_frame = p3_idx = None
+    # P3 — wrist risen 15%+ from P1 AND trail elbow folded 15°+
+    p3_idx, p3_frame = None, None
+    p1_re_angle = angle_3pt_lm(p1_frame, 12, 14, 16)
+
     for fi, wy, fr in post_p1:
-        lh = lm3(fr, 23)
-        rh = lm3(fr, 24)
-        if lh and rh:
-            hmy = (lh['y'] + rh['y']) / 2
-            if wy < hmy:
-                p3_frame = fr
-                p3_idx   = fi
-                break
+        if fi <= p1_idx:
+            continue
+        wrist_rise = p1_rw_y - wy   # positive = risen (Y inverted in 3D)
+        if wrist_rise < 0.15:
+            continue
+        re_angle = angle_3pt_lm(fr, 12, 14, 16)
+        if re_angle is None:
+            continue
+        if p1_re_angle is not None and (p1_re_angle - re_angle) >= 15:
+            p3_idx = fi; p3_frame = fr; break
 
-    # P4 — wrist Y minimum
-    search = [(fi, wy, fr) for fi, wy, fr in post_p1
-              if fi < p1_idx + int(fps * 30)]
-    p4_idx = p4_frame = None
-    if search:
-        p4_idx, _, p4_frame = min(search, key=lambda x: x[1])
+    # Fallback: wrist rise threshold only
+    if p3_idx is None:
+        for fi, wy, fr in post_p1:
+            if fi <= p1_idx:
+                continue
+            if (p1_rw_y - wy) >= 0.20:
+                p3_idx = fi; p3_frame = fr; break
 
-    # P5 — hip rotation changes ≥ 2° from P4 value
-    p5_frame = p5_idx = None
-    if p4_frame and p4_idx:
+    # P4 — frame of maximum trail shoulder rotation from P1
+    # Search only frames after P3 (or post_p1 if P3 not found)
+    p4_idx, p4_frame = None, None
+    max_shoulder_rot = 0
+    p4_search_start = p3_idx if p3_idx else p1_idx
+    post_p3 = [(fi, wy, fr) for fi, wy, fr in rw if fi > p4_search_start]
+
+    # P4 using club head (more accurate than shoulder rotation)
+    if len(club_lookup) > 10:
+        # Find frame with minimum club_head Y after P3
+        # (highest point = minimum Y in image coords)
+        post_p3_club = [
+            (fi, club_lookup[fr['frame']]['y'], fr)
+            for fi, wy, fr in rw
+            if fi > (p3_idx or p1_idx)
+            and fr['frame'] in club_lookup
+        ]
+        if len(post_p3_club) > 5:
+            best_y = 1.0
+            frames_since_peak = 0
+            for i, (fi, cy, fr) in enumerate(post_p3_club):
+                if cy < best_y:
+                    best_y = cy
+                    p4_idx = fi
+                    p4_frame = fr
+                    frames_since_peak = 0
+                else:
+                    frames_since_peak += 1
+                    if frames_since_peak > 10:
+                        break
+            print(f"[PHASES] P4 from club head: "
+                  f"frame {p4_frame['frame'] if p4_frame else None}, y={best_y:.3f}")
+
+    # Body-landmark P4: maximum trail shoulder rotation (fallback)
+    if p4_idx is None:
+        for fi, wy, fr in post_p3:
+            lm_ls = lm3(fr, 11)
+            lm_rs = lm3(fr, 12)
+            if not lm_ls or not lm_rs:
+                continue
+            shoulder_rot = abs(rot_xz(lm_ls, lm_rs) - shoulder_rot_p1)
+            if shoulder_rot > max_shoulder_rot:
+                max_shoulder_rot = shoulder_rot
+                p4_idx   = fi
+                p4_frame = fr
+            elif p4_idx and (fi - p4_idx) > 10:
+                break  # 10+ frame sustained decrease = past the top
+
+    # Fallback: wrist Y minimum after P3
+    if p4_idx is None:
+        fallback = [(fi, wy, fr) for fi, wy, fr in post_p3]
+        if fallback:
+            p4_idx, _, p4_frame = min(fallback, key=lambda x: x[1])
+
+    # hr_p4 needed by P5
+    if p4_frame:
         lh4   = lm3(p4_frame, 23)
         rh4   = lm3(p4_frame, 24)
         hr_p4 = abs(rot_xz(lh4, rh4) - hip_rot_p1) if lh4 and rh4 else 0
-        for fi, wy, fr in rw:
-            if fi <= p4_idx + 10:
+    else:
+        hr_p4 = 0
+
+    # P5 — first frame after P4 where hip rotation RATE exceeds shoulder rotation RATE
+    # Hips accelerating faster than shoulders = transition has started
+    p5_idx, p5_frame = None, None
+    if p4_idx:
+        post_p4       = [(fi, wy, fr) for fi, wy, fr in rw if fi > p4_idx]
+        prev_hip_rot  = hr_p4
+        prev_sh_rot   = max_shoulder_rot
+
+        for i in range(1, len(post_p4)):
+            fi, wy, fr         = post_p4[i]
+            lm_lh = lm3(fr, 23); lm_rh = lm3(fr, 24)
+            lm_ls = lm3(fr, 11); lm_rs = lm3(fr, 12)
+            if not all([lm_lh, lm_rh, lm_ls, lm_rs]):
                 continue
-            lh = lm3(fr, 23)
-            rh = lm3(fr, 24)
-            if lh and rh:
-                if abs(abs(rot_xz(lh, rh) - hip_rot_p1) - hr_p4) >= 2.0:
-                    p5_frame = fr
-                    p5_idx   = fi
-                    break
-            if fi > p4_idx + 80:
-                break
+            curr_hip_rot = abs(rot_xz(lm_lh, lm_rh) - hip_rot_p1)
+            curr_sh_rot  = abs(rot_xz(lm_ls, lm_rs) - shoulder_rot_p1)
+            hip_rate = curr_hip_rot - prev_hip_rot
+            sh_rate  = curr_sh_rot  - prev_sh_rot
+            # Hips moving toward target while shoulders decelerate
+            if hip_rate > 0 and sh_rate < 0:
+                p5_idx = fi; p5_frame = fr; break
+            prev_hip_rot = curr_hip_rot
+            prev_sh_rot  = curr_sh_rot
+
+        # Fallback: first frame hips lead shoulders after P4
+        if p5_idx is None:
+            for fi, wy, fr in post_p4[5:]:
+                lm_lh = lm3(fr, 23); lm_rh = lm3(fr, 24)
+                lm_ls = lm3(fr, 11); lm_rs = lm3(fr, 12)
+                if not all([lm_lh, lm_rh, lm_ls, lm_rs]):
+                    continue
+                hr = abs(rot_xz(lm_lh, lm_rh) - hip_rot_p1)
+                sr = abs(rot_xz(lm_ls, lm_rs) - shoulder_rot_p1)
+                if hr > sr:
+                    p5_idx = fi; p5_frame = fr; break
 
     # P6 — wrist returns to shoulder Y level going down
     p6_frame = p6_idx = None
@@ -358,6 +515,8 @@ def detect_phases():
                 velocities.append((v, post_p4[i][0], post_p4[i][2]))
             velocities.sort(reverse=True)
             p7_idx, p7_frame = velocities[0][1], velocities[0][2]
+
+    print(f"[PHASES] P1={p1_idx} P3={p3_idx} P4={p4_idx} P5={p5_idx} P7={p7_idx}", flush=True)
 
     def pr(label, fr, fi):
         if fr is None:
