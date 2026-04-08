@@ -868,6 +868,9 @@ let frameLookup     = {};
 let videoFps        = 30;
 let landmarksOn     = true;
 let poseFrameCount  = 0;
+let freezeFrames    = new Set();
+let triggeredFrames = new Set();
+let isFrozen        = false;
 
 const video = document.getElementById('main-video');
 const FPS_DEFAULT = 30;
@@ -980,6 +983,10 @@ async function uploadVideo(file) {
     return;
   }
 
+  freezeFrames    = new Set();
+  triggeredFrames = new Set();
+  isFrozen        = false;
+
   showUploadProgress();
   setStatus('Uploading...');
   document.getElementById('upload-btn') && (document.getElementById('upload-btn').disabled = true);
@@ -1044,6 +1051,13 @@ async function uploadVideo(file) {
     const phaseData = await phaseResp.json();
     updatePhases(phaseData, landmarkData.fps || 30);
 
+    freezeFrames    = new Set();
+    triggeredFrames = new Set();
+    isFrozen        = false;
+    if (phaseData.freeze_frames) {
+      phaseData.freeze_frames.forEach(f => freezeFrames.add(f));
+    }
+
     document.getElementById('no-video-msg').style.display = 'none';
     document.getElementById('si-fps').textContent = (landmarkData.fps || 30) + ' fps';
     document.getElementById('si-res').textContent =
@@ -1065,6 +1079,46 @@ async function uploadVideo(file) {
     setStatus('Error: ' + err.message);
     showError(err.message || 'Unknown error');
   }
+}
+
+function drawFreezeBanner(phaseName, phaseKey) {
+  if (!isFrozen) return;
+  const canvas = document.getElementById('landmarkCanvas');
+  const ctx    = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const colors = { P1:'#ffffff', P3:'#ff8c00', P4:'#ff0000', P5:'#cc00cc', P7:'#00cc44' };
+  const color  = colors[phaseKey] || '#ffffff';
+
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, W, 56);
+  ctx.fillStyle = color;
+  ctx.font      = 'bold 22px Courier New';
+  ctx.fillText('|| ' + phaseName, 16, 36);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font      = '13px Courier New';
+  ctx.fillText('ANALYZING · 3s', W - 160, 36);
+}
+
+let _freezeBannerName = '';
+let _freezeBannerKey  = '';
+
+async function triggerPhaseFreeze(frameNum) {
+  isFrozen = true;
+  video.pause();
+
+  _freezeBannerName = '';
+  _freezeBannerKey  = '';
+  for (const [key, data] of Object.entries(PHASES)) {
+    if (data.frame === frameNum) {
+      _freezeBannerName = key + ' · ' + data.label;
+      _freezeBannerKey  = key;
+      break;
+    }
+  }
+
+  await new Promise(r => setTimeout(r, 3000));
+  isFrozen = false;
+  video.play();
 }
 
 function updatePhases(data, fps) {
@@ -1541,6 +1595,24 @@ video.addEventListener('loadedmetadata', () => {
   console.log('Starting RAF render loop');
   function renderLoop() {
     drawLandmarks();
+
+    // Check freeze frames
+    if (!isFrozen && !video.paused && freezeFrames.size > 0) {
+      const currentFrame = Math.round(video.currentTime * videoFps);
+      for (const ff of freezeFrames) {
+        if (Math.abs(currentFrame - ff) <= 1 && !triggeredFrames.has(ff)) {
+          triggeredFrames.add(ff);
+          triggerPhaseFreeze(ff);
+          break;
+        }
+      }
+    }
+
+    // Draw freeze banner on top if frozen
+    if (isFrozen) {
+      drawFreezeBanner(_freezeBannerName, _freezeBannerKey);
+    }
+
     requestAnimationFrame(renderLoop);
   }
   requestAnimationFrame(renderLoop);

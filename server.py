@@ -339,18 +339,31 @@ def detect_phases():
                     p6_idx   = fi
                     break
 
-    # P7 — wrist closest to P1 Y after P4
+    # P7 — frame of maximum trail wrist Y velocity on downswing
     p7_frame = p7_idx = None
     if p4_idx:
-        post = [(fi, wy, fr) for fi, wy, fr in rw if fi > p4_idx]
-        if post:
-            p7_idx, _, p7_frame = min(post, key=lambda x: abs(x[1] - rw_y_p1))
+        post_p4 = [(fi, wy, fr) for fi, wy, fr in rw if fi > p4_idx]
+        if len(post_p4) > 1:
+            velocities = []
+            for i in range(1, len(post_p4)):
+                v = abs(post_p4[i][1] - post_p4[i-1][1])
+                velocities.append((v, post_p4[i][0], post_p4[i][2]))
+            velocities.sort(reverse=True)
+            p7_idx, p7_frame = velocities[0][1], velocities[0][2]
 
     def pr(label, fr, fi):
         if fr is None:
             return {'label': label, 'frame': None, 'time_s': None, 'detected': False}
         return {'label': label, 'frame': fi,
                 'time_s': round(fi / fps, 3), 'detected': True}
+
+    freeze_frames = [
+        fi for _, fi in [
+            ('P1', p1_idx), ('P3', p3_idx),
+            ('P4', p4_idx), ('P5', p5_idx),
+            ('P7', p7_idx),
+        ] if fi is not None
+    ]
 
     return jsonify({
         'P1': pr('Address',    p1_frame, p1_idx),
@@ -360,6 +373,7 @@ def detect_phases():
         'P5': pr('Transition', p5_frame, p5_idx),
         'P6': pr('Pre-Impact', p6_frame, p6_idx),
         'P7': pr('Impact',     p7_frame, p7_idx),
+        'freeze_frames': freeze_frames,
     })
 
 
