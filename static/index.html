@@ -1597,13 +1597,22 @@ video.addEventListener('timeupdate', function() {
     if (Math.abs(currentFrame - ff) <= 1 &&
         !triggeredFrames.has(ff)) {
       triggeredFrames.add(ff);
-      doFreeze();
+      let phaseName = '';
+      let phaseKey  = '';
+      for (const [key, data] of Object.entries(PHASES)) {
+        if (data.frame === ff) {
+          phaseKey  = key;
+          phaseName = key + ' · ' + (data.label || '');
+          break;
+        }
+      }
+      doFreeze(phaseName, phaseKey);
       break;
     }
   }
 });
 
-async function doFreeze() {
+async function doFreeze(phaseName, phaseKey) {
   freezeActive = true;
   isFrozen     = true;
   video.pause();
