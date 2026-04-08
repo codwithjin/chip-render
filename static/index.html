@@ -946,6 +946,10 @@ async function pollJob(job_id) {
       setProgress(100, 'Fetching landmark data...');
       const res = await fetch('/result/' + job_id);
 
+      if (res.status === 404) {
+        setStatus('Server restarted — please re-upload for landmarks');
+        return null;
+      }
       if (!res.ok) {
         throw new Error(`Result fetch failed: ${res.status} ${res.statusText}`);
       }
@@ -1019,6 +1023,10 @@ async function uploadVideo(file) {
     setStatus('MediaPipe processing...');
     setProgress(0, 'Starting landmark extraction...');
     const landmarkData = await pollJob(job_id);
+    if (!landmarkData) {
+      hideUploadProgress();
+      return;
+    }
 
     // ── Build frame lookup ──
     buildFrameLookup(landmarkData);
@@ -1035,11 +1043,6 @@ async function uploadVideo(file) {
     });
     const phaseData = await phaseResp.json();
     updatePhases(phaseData, landmarkData.fps || 30);
-
-    // ── Load video ──
-    const videoURL = URL.createObjectURL(file);
-    video.src = videoURL;
-    video.load();
 
     document.getElementById('no-video-msg').style.display = 'none';
     document.getElementById('si-fps').textContent = (landmarkData.fps || 30) + ' fps';
@@ -1550,7 +1553,14 @@ const fileInput  = document.getElementById('file-input');
 const uploadZone = document.getElementById('upload-zone');
 
 fileInput.addEventListener('change', function () {
-  if (this.files.length > 0) uploadVideo(this.files[0]);
+  if (this.files.length > 0) {
+    const videoEl = document.getElementById('main-video');
+    const previewURL = URL.createObjectURL(this.files[0]);
+    videoEl.src = previewURL;
+    videoEl.load();
+    document.getElementById('no-video-msg').style.display = 'none';
+    uploadVideo(this.files[0]);
+  }
   this.value = '';
 });
 
@@ -1560,7 +1570,14 @@ uploadZone.addEventListener('drop', e => {
   e.preventDefault();
   uploadZone.classList.remove('drag-over');
   const files = e.dataTransfer.files;
-  if (files.length > 0) uploadVideo(files[0]);
+  if (files.length > 0) {
+    const videoEl = document.getElementById('main-video');
+    const previewURL = URL.createObjectURL(files[0]);
+    videoEl.src = previewURL;
+    videoEl.load();
+    document.getElementById('no-video-msg').style.display = 'none';
+    uploadVideo(files[0]);
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
