@@ -871,6 +871,7 @@ let poseFrameCount  = 0;
 let freezeFrames    = new Set();
 let triggeredFrames = new Set();
 let isFrozen        = false;
+let freezeActive    = false;
 
 const video = document.getElementById('main-video');
 const FPS_DEFAULT = 30;
@@ -983,9 +984,10 @@ async function uploadVideo(file) {
     return;
   }
 
-  freezeFrames    = new Set();
-  triggeredFrames = new Set();
-  isFrozen        = false;
+  freezeFrames.clear();
+  triggeredFrames.clear();
+  freezeActive = false;
+  isFrozen     = false;
 
   showUploadProgress();
   setStatus('Uploading...');
@@ -1051,12 +1053,17 @@ async function uploadVideo(file) {
     const phaseData = await phaseResp.json();
     updatePhases(phaseData, landmarkData.fps || 30);
 
-    freezeFrames    = new Set();
-    triggeredFrames = new Set();
-    isFrozen        = false;
-    if (phaseData.freeze_frames) {
-      phaseData.freeze_frames.forEach(f => freezeFrames.add(f));
-    }
+    freezeFrames.clear();
+    triggeredFrames.clear();
+    freezeActive = false;
+    isFrozen     = false;
+    const FREEZE_PHASES = ['P1','P3','P4','P5','P7'];
+    FREEZE_PHASES.forEach(key => {
+      if (PHASES[key] && PHASES[key].frame !== null && PHASES[key].detected) {
+        freezeFrames.add(PHASES[key].frame);
+      }
+    });
+    console.log('Freeze frames set:', [...freezeFrames]);
 
     document.getElementById('no-video-msg').style.display = 'none';
     document.getElementById('si-fps').textContent = (landmarkData.fps || 30) + ' fps';
@@ -1578,6 +1585,33 @@ video.addEventListener('pause',      updatePlayBtn);
 video.addEventListener('timeupdate', updateScrub);
 // drawLandmarks is driven by the RAF loop — see loadedmetadata handler
 video.addEventListener('ended',      updatePlayBtn);
+
+video.addEventListener('timeupdate', function() {
+  if (freezeActive) return;
+  if (freezeFrames.size === 0) return;
+  if (video.paused) return;
+
+  const currentFrame = Math.round(video.currentTime * videoFps);
+
+  for (const ff of freezeFrames) {
+    if (Math.abs(currentFrame - ff) <= 1 &&
+        !triggeredFrames.has(ff)) {
+      triggeredFrames.add(ff);
+      doFreeze();
+      break;
+    }
+  }
+});
+
+async function doFreeze() {
+  freezeActive = true;
+  isFrozen     = true;
+  video.pause();
+  await new Promise(r => setTimeout(r, 3000));
+  video.play();
+  freezeActive = false;
+  isFrozen     = false;
+}
 
 video.addEventListener('loadedmetadata', () => {
   console.log('Video metadata loaded:',
