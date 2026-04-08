@@ -1109,20 +1109,11 @@ function drawFreezeBanner(phaseName, phaseKey) {
 let _freezeBannerName = '';
 let _freezeBannerKey  = '';
 
-async function triggerPhaseFreeze(frameNum) {
+async function triggerPhaseFreeze(frameNum, phaseName, phaseKey) {
   isFrozen = true;
+  _freezeBannerName = phaseName || '';
+  _freezeBannerKey  = phaseKey  || '';
   video.pause();
-
-  _freezeBannerName = '';
-  _freezeBannerKey  = '';
-  for (const [key, data] of Object.entries(phases)) {
-    if (data.frame === frameNum) {
-      _freezeBannerName = key + ' · ' + data.label;
-      _freezeBannerKey  = key;
-      break;
-    }
-  }
-
   await new Promise(r => setTimeout(r, 3000));
   isFrozen = false;
   video.play();
@@ -1645,7 +1636,16 @@ video.addEventListener('loadedmetadata', () => {
       for (const ff of freezeFrames) {
         if (Math.abs(currentFrame - ff) <= 1 && !triggeredFrames.has(ff)) {
           triggeredFrames.add(ff);
-          triggerPhaseFreeze(ff);
+          let phaseName = '';
+          let phaseKey  = '';
+          for (const [key, data] of Object.entries(phases || {})) {
+            if (data.frame === ff) {
+              phaseKey  = key;
+              phaseName = key + ' · ' + (data.label || '');
+              break;
+            }
+          }
+          triggerPhaseFreeze(ff, phaseName, phaseKey);
           break;
         }
       }
