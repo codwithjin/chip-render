@@ -1108,7 +1108,7 @@ async function triggerPhaseFreeze(frameNum) {
 
   _freezeBannerName = '';
   _freezeBannerKey  = '';
-  for (const [key, data] of Object.entries(PHASES)) {
+  for (const [key, data] of Object.entries(phases)) {
     if (data.frame === frameNum) {
       _freezeBannerName = key + ' · ' + data.label;
       _freezeBannerKey  = key;
@@ -1204,10 +1204,10 @@ function drawLandmarks() {
   const canvas = document.getElementById('landmarkCanvas');
   const ctx    = canvas.getContext('2d');
 
-  // Size canvas to its CSS display size
-  const displayRect = canvas.getBoundingClientRect();
-  canvas.width  = displayRect.width  || 1;
-  canvas.height = displayRect.height || 1;
+  // Size canvas to its parent container dimensions
+  const container = canvas.parentElement;
+  canvas.width  = container.clientWidth  || 800;
+  canvas.height = container.clientHeight || 600;
   const canW = canvas.width;
   const canH = canvas.height;
 
