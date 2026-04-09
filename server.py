@@ -27,7 +27,7 @@ MAX_FILE_MB = 500
 jobs = {}           # job_id → job dict
 jobs_lock = threading.Lock()
 
-YOLO_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'golf_club_v1_best.pt')
+YOLO_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'golf_driver_v2_best.pt')
 yolo_model = None
 if os.path.exists(YOLO_MODEL_PATH):
     yolo_model = YOLO(YOLO_MODEL_PATH)
@@ -173,31 +173,45 @@ def run_mediapipe(video_path, job_id):
                     }
                 fd['poses'].append(entry)
 
-            # YOLO club head detection
+            # YOLO detection — club head, handle, golf ball
             club_head = None
+            club_handle = None
+            golf_ball = None
+
             if yolo_model is not None:
                 try:
                     yolo_results = yolo_model(
-                        frame,
-                        verbose=False,
-                        conf=0.25
-                    )
-                    if yolo_results and len(yolo_results[0].boxes):
-                        box = yolo_results[0].boxes[0]
-                        x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        cx = (x1 + x2) / 2
-                        cy = (y1 + y2) / 2
-                        club_head = {
-                            'x': cx / width,
-                            'y': cy / height,
-                            'x_px': cx,
-                            'y_px': cy,
-                            'conf': float(box.conf[0])
-                        }
+                        frame, verbose=False, conf=0.25)
+                    if yolo_results:
+                        for box in yolo_results[0].boxes:
+                            x1, y1, x2, y2 = box.xyxy[0].tolist()
+                            cx = (x1 + x2) / 2
+                            cy = (y1 + y2) / 2
+                            conf = float(box.conf[0])
+                            cls = int(box.cls[0])
+                            names = yolo_results[0].names
+                            label = names[cls].lower()
+                            obj = {
+                                'x': cx / width,
+                                'y': cy / height,
+                                'x2': x2 / width,
+                                'y2': y2 / height,
+                                'x_px': cx,
+                                'y_px': cy,
+                                'conf': conf
+                            }
+                            if 'head' in label:
+                                club_head = obj
+                            elif 'handle' in label:
+                                club_handle = obj
+                            elif 'ball' in label:
+                                golf_ball = obj
                 except Exception as e:
                     pass
 
             fd['club_head'] = club_head
+            fd['club_handle'] = club_handle
+            fd['golf_ball'] = golf_ball
 
             frames_out.append(fd)
             frame_num += 1
