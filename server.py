@@ -183,6 +183,7 @@ def run_mediapipe(video_path, job_id):
                     yolo_results = yolo_model(
                         frame, verbose=False, conf=0.25)
                     if yolo_results:
+                        print(f"[YOLO] Class names: {yolo_results[0].names}", flush=True)
                         for box in yolo_results[0].boxes:
                             x1, y1, x2, y2 = box.xyxy[0].tolist()
                             cx = (x1 + x2) / 2
@@ -300,6 +301,9 @@ def detect_phases():
     for f in frames:
         if f.get('club_head'):
             club_lookup[f['frame']] = f['club_head']
+
+    # Build club head position lookup by frame number
+    club_head_by_frame = club_lookup
 
     print(f"[PHASES] Club head detected in "
           f"{len(club_lookup)}/{len(frames)} frames")
@@ -467,68 +471,140 @@ def detect_phases():
     else:
         hr_p4 = 0
 
-    # P5 — first frame after P4 where hip rotation RATE exceeds shoulder rotation RATE
-    # Hips accelerating faster than shoulders = transition has started
+    # P5 — first frame after P4 where club head moves consistently downward
+    # (Y increasing in image coords) for 3+ consecutive frames
     p5_idx, p5_frame = None, None
-    if p4_idx:
-        post_p4       = [(fi, wy, fr) for fi, wy, fr in rw if fi > p4_idx]
-        prev_hip_rot  = hr_p4
-        prev_sh_rot   = max_shoulder_rot
 
+    if len(club_head_by_frame) > 10 and p4_idx is not None:
+        post_p4_club = [
+            (fr, club_head_by_frame[fr]['y'])
+            for fr in sorted(club_head_by_frame.keys())
+            if fr > p4_idx
+        ]
+        consecutive = 0
+        for i in range(1, len(post_p4_club)):
+            fr_curr, y_curr = post_p4_club[i]
+            fr_prev, y_prev = post_p4_club[i-1]
+            if y_curr > y_prev:
+                consecutive += 1
+                if consecutive >= 3:
+                    p5_frame_num = post_p4_club[i-2][0]
+                    p5_frame = p5_frame_num
+                    for fi, wy, fr in rw:
+                        if fr['frame'] == p5_frame_num:
+                            p5_idx = fi
+                            break
+                    break
+            else:
+                consecutive = 0
+
+    # Fallback to body landmark sequencing
+    if p5_idx is None:
+        prev_hr = hr_p4
+        prev_sr = max_shoulder_rot
+        post_p4 = [(fi, wy, fr) for fi, wy, fr in rw if fi > (p4_idx or 0)]
         for i in range(1, len(post_p4)):
-            fi, wy, fr         = post_p4[i]
-            lm_lh = lm3(fr, 23); lm_rh = lm3(fr, 24)
-            lm_ls = lm3(fr, 11); lm_rs = lm3(fr, 12)
-            if not all([lm_lh, lm_rh, lm_ls, lm_rs]):
-                continue
-            curr_hip_rot = abs(rot_xz(lm_lh, lm_rh) - hip_rot_p1)
-            curr_sh_rot  = abs(rot_xz(lm_ls, lm_rs) - shoulder_rot_p1)
-            hip_rate = curr_hip_rot - prev_hip_rot
-            sh_rate  = curr_sh_rot  - prev_sh_rot
-            # Hips moving toward target while shoulders decelerate
-            if hip_rate > 0 and sh_rate < 0:
+            fi, wy, fr = post_p4[i]
+            lh = lm3(fr, 23); rh = lm3(fr, 24)
+            ls = lm3(fr, 11); rs = lm3(fr, 12)
+            if not all([lh, rh, ls, rs]): continue
+            curr_hr = abs(rot_xz(lh, rh) - hip_rot_p1)
+            curr_sr = abs(rot_xz(ls, rs) - shoulder_rot_p1)
+            if curr_hr - prev_hr > 0 and curr_sr - prev_sr < 0:
                 p5_idx = fi; p5_frame = fr; break
-            prev_hip_rot = curr_hip_rot
-            prev_sh_rot  = curr_sh_rot
+            prev_hr = curr_hr; prev_sr = curr_sr
 
-        # Fallback: first frame hips lead shoulders after P4
+        # Second fallback: first frame hips lead shoulders
         if p5_idx is None:
             for fi, wy, fr in post_p4[5:]:
-                lm_lh = lm3(fr, 23); lm_rh = lm3(fr, 24)
-                lm_ls = lm3(fr, 11); lm_rs = lm3(fr, 12)
-                if not all([lm_lh, lm_rh, lm_ls, lm_rs]):
-                    continue
-                hr = abs(rot_xz(lm_lh, lm_rh) - hip_rot_p1)
-                sr = abs(rot_xz(lm_ls, lm_rs) - shoulder_rot_p1)
-                if hr > sr:
+                lh = lm3(fr, 23); rh = lm3(fr, 24)
+                ls = lm3(fr, 11); rs = lm3(fr, 12)
+                if not all([lh, rh, ls, rs]): continue
+                if abs(rot_xz(lh, rh) - hip_rot_p1) > abs(rot_xz(ls, rs) - shoulder_rot_p1):
                     p5_idx = fi; p5_frame = fr; break
 
-    # P6 — wrist returns to shoulder Y level going down
-    p6_frame = p6_idx = None
-    if p4_idx:
-        for fi, wy, fr in rw:
-            if fi <= p4_idx:
+    print(f"[PHASES] P5 frame: {p5_idx}", flush=True)
+
+    # P7 — Impact: frame of minimum distance between club head and golf ball
+    p7_idx, p7_frame = None, None
+
+    if len(club_lookup) > 5:
+        min_dist = float('inf')
+        for f in frames:
+            if not f.get('club_head') or not f.get('golf_ball'):
                 continue
-            ls = lm3(fr, 11)
-            rs = lm3(fr, 12)
+            frame_num = f['frame']
+            if p4_idx and frame_num <= p4_idx:
+                continue
+            ch = f['club_head']
+            gb = f['golf_ball']
+            dist = ((ch['x'] - gb['x'])**2 +
+                    (ch['y'] - gb['y'])**2) ** 0.5
+            if dist < min_dist:
+                min_dist = dist
+                p7_frame = frame_num
+                for fi, wy, fr in rw:
+                    if fr['frame'] == frame_num:
+                        p7_idx = fi
+                        break
+
+        if p7_frame:
+            print(f"[PHASES] P7 from ball proximity: "
+                  f"frame {p7_frame} dist={min_dist:.4f}", flush=True)
+
+    # Fallback to wrist velocity if no ball detected
+    if p7_idx is None:
+        post_p4 = [(fi, wy, fr) for fi, wy, fr in rw if fi > (p4_idx or 0)]
+        if len(post_p4) > 1:
+            velocities = [
+                (abs(post_p4[i][1] - post_p4[i-1][1]),
+                 post_p4[i][0], post_p4[i][2])
+                for i in range(1, len(post_p4))
+            ]
+            velocities.sort(reverse=True)
+            p7_idx = velocities[0][1]
+            p7_frame = velocities[0][2]
+            print(f"[PHASES] P7 fallback wrist velocity: "
+                  f"frame {p7_frame['frame']}", flush=True)
+
+    # P6 — club head at hip height on the downswing (between P5 and P7)
+    p6_idx, p6_frame = None, None
+
+    if len(club_head_by_frame) > 10 and p5_idx is not None and p7_idx is not None:
+        min_diff = float('inf')
+        frames_by_num = {f['frame']: f for f in frames if f.get('poses')}
+        search_frames = [
+            fr for fr in sorted(club_head_by_frame.keys())
+            if p5_idx < fr < p7_idx
+        ]
+        for fr_num in search_frames:
+            ch_y = club_head_by_frame[fr_num]['y']
+            frame_dict = frames_by_num.get(fr_num)
+            if not frame_dict: continue
+            lh = lm3(frame_dict, 23)
+            rh = lm3(frame_dict, 24)
+            if not lh or not rh: continue
+            hip_y = (lh['y'] + rh['y']) / 2
+            diff = abs(ch_y - hip_y)
+            if diff < min_diff:
+                min_diff = diff
+                p6_frame = fr_num
+                for fi, wy, fr in rw:
+                    if fr['frame'] == fr_num:
+                        p6_idx = fi
+                        break
+
+    # Fallback: wrist returns to shoulder Y level going down
+    if p6_idx is None and p4_idx:
+        for fi, wy, fr in rw:
+            if fi <= p4_idx: continue
+            ls = lm3(fr, 11); rs = lm3(fr, 12)
             if ls and rs:
                 smy = (ls['y'] + rs['y']) / 2
                 if wy > smy:
-                    p6_frame = fr
-                    p6_idx   = fi
-                    break
+                    p6_frame = fr; p6_idx = fi; break
 
-    # P7 — frame of maximum trail wrist Y velocity on downswing
-    p7_frame = p7_idx = None
-    if p4_idx:
-        post_p4 = [(fi, wy, fr) for fi, wy, fr in rw if fi > p4_idx]
-        if len(post_p4) > 1:
-            velocities = []
-            for i in range(1, len(post_p4)):
-                v = abs(post_p4[i][1] - post_p4[i-1][1])
-                velocities.append((v, post_p4[i][0], post_p4[i][2]))
-            velocities.sort(reverse=True)
-            p7_idx, p7_frame = velocities[0][1], velocities[0][2]
+    print(f"[PHASES] P6 frame: {p6_idx}", flush=True)
 
     print(f"[PHASES] P1={p1_idx} P3={p3_idx} P4={p4_idx} P5={p5_idx} P7={p7_idx}", flush=True)
 
@@ -542,7 +618,7 @@ def detect_phases():
         fi for _, fi in [
             ('P1', p1_idx), ('P3', p3_idx),
             ('P4', p4_idx), ('P5', p5_idx),
-            ('P7', p7_idx),
+            ('P6', p6_idx), ('P7', p7_idx),
         ] if fi is not None
     ]
 

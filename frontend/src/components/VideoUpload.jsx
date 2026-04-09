@@ -15,7 +15,12 @@ function buildFrameLookup(data) {
   // No normalization needed — just index by frame number.
   data.frames.forEach(f => {
     if (f.poses?.length > 0) {
-      frameLookup[f.frame] = { ...f.poses[0], club_head: f.club_head ?? null }
+      frameLookup[f.frame] = {
+        ...f.poses[0],
+        club_head:   f.club_head   ?? null,
+        club_handle: f.club_handle ?? null,
+        golf_ball:   f.golf_ball   ?? null,
+      }
       poseFrameCount++
     }
   })

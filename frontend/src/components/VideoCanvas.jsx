@@ -114,68 +114,85 @@ export default function VideoCanvas({ videoRef }) {
             ctx.globalAlpha = 1
           })
 
-          // Draw club head detection
-          const frameData = frameLookup[currentFrame]
-            || frameLookup[currentFrame + 1]
-            || frameLookup[currentFrame - 1]
-
-          if (frameData?.club_head) {
-            const ch = frameData.club_head
-            const chX = oX + ch.x * rW
-            const chY = oY + ch.y * rH
-
-            // Determine if this is P1 frame
-            const isP1Frame = phases?.P1?.frame !== undefined &&
-              Math.abs(currentFrame - phases.P1.frame) <= 2
-
-            if (isP1Frame) {
-              // P1 — green if club head low (correct address position)
-              // Red if club head too high (elevated at address)
-              // Threshold: club head Y > 0.65 of frame = correct
-              // (high Y value = low on screen = ground level)
-              const isCorrect = ch.y > 0.65
-
-              ctx.beginPath()
-              ctx.arc(chX, chY, 18, 0, Math.PI * 2)
-              ctx.strokeStyle = isCorrect ? '#00ff44' : '#ff2222'
-              ctx.lineWidth = 3
-              ctx.globalAlpha = 0.9
-              ctx.stroke()
-
-              // Inner fill
-              ctx.beginPath()
-              ctx.arc(chX, chY, 18, 0, Math.PI * 2)
-              ctx.fillStyle = isCorrect ? '#00ff44' : '#ff2222'
-              ctx.globalAlpha = 0.15
-              ctx.fill()
-
-              // Label
-              ctx.fillStyle = isCorrect ? '#00ff44' : '#ff2222'
-              ctx.globalAlpha = 1.0
-              ctx.font = 'bold 11px Courier New'
-              ctx.fillText(
-                isCorrect ? 'ADDRESS ✓' : 'ADDRESS ✗',
-                chX + 22,
-                chY + 4
-              )
-            } else {
-              // All other frames — small white tracking dot
-              if (ch.conf > 0.3) {
-                ctx.beginPath()
-                ctx.arc(chX, chY, 5, 0, Math.PI * 2)
-                ctx.fillStyle = '#ffffff'
-                ctx.globalAlpha = 0.4 + ch.conf * 0.4
-                ctx.fill()
-              }
-            }
-
-            ctx.globalAlpha = 1.0
-          }
         } else {
           console.log('[Canvas] No landmarks_2d for frame', currentFrame,
                       '| pose exists:', !!pose,
                       '| pose keys:', pose ? Object.keys(pose) : 'none',
                       '| nearest frameLookup keys:', Object.keys(frameLookup).slice(0, 5))
+        }
+      }
+
+      // ── Club tracking visualization ──
+      const currentFrame = Math.round(video.currentTime * videoFps)
+      const chFrame = frameLookup[currentFrame]
+        || frameLookup[currentFrame + 1]
+        || frameLookup[currentFrame - 1]
+
+      if (chFrame) {
+        const { club_head, club_handle, golf_ball } = chFrame
+
+        // Draw shaft line from handle to head
+        if (club_head && club_handle) {
+          const hx = oX + club_handle.x * rW
+          const hy = oY + club_handle.y * rH
+          const cx = oX + club_head.x * rW
+          const cy = oY + club_head.y * rH
+          ctx.beginPath()
+          ctx.moveTo(hx, hy)
+          ctx.lineTo(cx, cy)
+          ctx.strokeStyle = '#ffffff'
+          ctx.lineWidth = 2
+          ctx.globalAlpha = 0.7
+          ctx.stroke()
+          ctx.globalAlpha = 1.0
+        }
+
+        // Red circle — club handle (grip end)
+        if (club_handle && club_handle.conf > 0.25) {
+          const hx = oX + club_handle.x * rW
+          const hy = oY + club_handle.y * rH
+          ctx.beginPath()
+          ctx.arc(hx, hy, 8, 0, Math.PI * 2)
+          ctx.fillStyle = '#ff2222'
+          ctx.globalAlpha = 0.85
+          ctx.fill()
+          ctx.globalAlpha = 1.0
+        }
+
+        // White circle — middle of shaft
+        if (club_head && club_handle) {
+          const mx = oX + ((club_head.x + club_handle.x) / 2) * rW
+          const my = oY + ((club_head.y + club_handle.y) / 2) * rH
+          ctx.beginPath()
+          ctx.arc(mx, my, 5, 0, Math.PI * 2)
+          ctx.fillStyle = '#ffffff'
+          ctx.globalAlpha = 0.6
+          ctx.fill()
+          ctx.globalAlpha = 1.0
+        }
+
+        // Yellow circle — club head
+        if (club_head && club_head.conf > 0.25) {
+          const cx = oX + club_head.x * rW
+          const cy = oY + club_head.y * rH
+          ctx.beginPath()
+          ctx.arc(cx, cy, 10, 0, Math.PI * 2)
+          ctx.fillStyle = '#ffdd00'
+          ctx.globalAlpha = 0.9
+          ctx.fill()
+          ctx.globalAlpha = 1.0
+        }
+
+        // Green circle — golf ball
+        if (golf_ball && golf_ball.conf > 0.25) {
+          const bx = oX + golf_ball.x * rW
+          const by = oY + golf_ball.y * rH
+          ctx.beginPath()
+          ctx.arc(bx, by, 8, 0, Math.PI * 2)
+          ctx.fillStyle = '#00ff44'
+          ctx.globalAlpha = 0.9
+          ctx.fill()
+          ctx.globalAlpha = 1.0
         }
       }
     } else {
@@ -260,7 +277,7 @@ export default function VideoCanvas({ videoRef }) {
       setActivePhase, setFreezeActive, markFrameTriggered, videoRef])
 
   return (
-    <div className="relative w-full h-full bg-black">
+    <div className="relative w-full h-full bg-black overflow-hidden">
       <canvas ref={canvasRef} className="w-full h-full block" />
     </div>
   )

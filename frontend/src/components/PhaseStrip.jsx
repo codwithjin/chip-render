@@ -9,7 +9,7 @@ const PHASE_COLORS = {
   P1: '#888899', P2: '#009999', P3: '#996600',
   P4: '#6644bb', P5: '#aa0099', P6: '#998800', P7: '#009944',
 }
-const FREEZE_PHASES = new Set(['P1', 'P3', 'P4', 'P5', 'P7'])
+const FREEZE_PHASES = new Set(['P1', 'P3', 'P4', 'P5', 'P6', 'P7'])
 
 export default function PhaseStrip({ videoRef }) {
   const { phases, activePhase, setActivePhase } = useSwingStore()
