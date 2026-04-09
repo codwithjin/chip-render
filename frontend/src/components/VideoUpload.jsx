@@ -11,41 +11,19 @@ function buildFrameLookup(data) {
   const frameLookup = {}
   let poseFrameCount = 0
 
-  // First pass — collect raw poses
+  // Server (Tasks API) already provides landmarks_2d and landmarks_3d directly.
+  // No normalization needed — just index by frame number.
   data.frames.forEach(f => {
     if (f.poses?.length > 0) {
-      frameLookup[f.frame] = f.poses[0]
+      frameLookup[f.frame] = { ...f.poses[0], club_head: f.club_head ?? null }
       poseFrameCount++
     }
   })
 
-  // World-coord bounding box
-  const MARGIN = 0.07
-  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity
-  for (const pose of Object.values(frameLookup)) {
-    const raw = pose.landmarks || {}
-    for (const lm of Object.values(raw)) {
-      if ((lm.visibility || 0) >= 0.15) {
-        if (lm.x < xMin) xMin = lm.x; if (lm.x > xMax) xMax = lm.x
-        if (lm.y < yMin) yMin = lm.y; if (lm.y > yMax) yMax = lm.y
-      }
-    }
-  }
-
-  // Second pass — normalize to [MARGIN, 1-MARGIN]
-  for (const pose of Object.values(frameLookup)) {
-    const raw = pose.landmarks || {}
-    const lm2d = {}
-    for (const [id, lm] of Object.entries(raw)) {
-      lm2d[id] = {
-        x: MARGIN + ((lm.x - xMin) / (xMax - xMin || 1)) * (1 - 2 * MARGIN),
-        y: MARGIN + ((lm.y - yMin) / (yMax - yMin || 1)) * (1 - 2 * MARGIN),
-        z: lm.z,
-        visibility: lm.visibility,
-      }
-    }
-    pose.landmarks_2d = lm2d
-  }
+  console.log('[Upload] buildFrameLookup done. poseFrameCount:', poseFrameCount)
+  const sample = frameLookup[Object.keys(frameLookup)[0]]
+  console.log('[Upload] sample pose keys:', sample ? Object.keys(sample) : 'none')
+  console.log('[Upload] sample landmarks_2d keys:', sample?.landmarks_2d ? Object.keys(sample.landmarks_2d).slice(0, 5) : 'MISSING')
 
   return { frameLookup, poseFrameCount }
 }
@@ -108,6 +86,9 @@ export default function VideoUpload({ videoRef }) {
 
       const { frameLookup, poseFrameCount } = buildFrameLookup(result)
       setFrameLookup(frameLookup, poseFrameCount, result.fps || 30)
+      console.log('[Upload] setFrameLookup called. size:', Object.keys(frameLookup).length, 'fps:', result.fps)
+      console.log('[Upload] sample frame 0:', frameLookup[0])
+      console.log('[Upload] videoUrl (previewUrl):', previewUrl)
 
       setStatus('Detecting swing phases...')
       const phaseData = await detectPhases(result.frames, result.fps || 30)

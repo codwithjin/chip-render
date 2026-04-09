@@ -61,6 +61,11 @@ export default function VideoCanvas({ videoRef }) {
 
       if (landmarksOn && Object.keys(frameLookup).length) {
         const currentFrame = Math.round(video.currentTime * videoFps)
+        console.log('[Canvas] currentFrame:', currentFrame,
+                    '| frameLookup size:', Object.keys(frameLookup).length,
+                    '| videoFps:', videoFps,
+                    '| readyState:', video.readyState,
+                    '| videoWidth:', video.videoWidth)
         let pose = frameLookup[currentFrame]
         if (!pose) {
           for (let d = 1; d <= 3; d++) {
@@ -69,7 +74,9 @@ export default function VideoCanvas({ videoRef }) {
           }
         }
         if (pose?.landmarks_2d) {
+          console.log('[Canvas] Drawing landmarks for frame', currentFrame)
           const lm2d = pose.landmarks_2d
+
           const lm3d = pose.landmarks_3d
           const toPixel = lm => ({ x: oX + lm.x * rW, y: oY + lm.y * rH })
           const zRadius = id => {
@@ -106,6 +113,69 @@ export default function VideoCanvas({ videoRef }) {
             }
             ctx.globalAlpha = 1
           })
+
+          // Draw club head detection
+          const frameData = frameLookup[currentFrame]
+            || frameLookup[currentFrame + 1]
+            || frameLookup[currentFrame - 1]
+
+          if (frameData?.club_head) {
+            const ch = frameData.club_head
+            const chX = oX + ch.x * rW
+            const chY = oY + ch.y * rH
+
+            // Determine if this is P1 frame
+            const isP1Frame = phases?.P1?.frame !== undefined &&
+              Math.abs(currentFrame - phases.P1.frame) <= 2
+
+            if (isP1Frame) {
+              // P1 — green if club head low (correct address position)
+              // Red if club head too high (elevated at address)
+              // Threshold: club head Y > 0.65 of frame = correct
+              // (high Y value = low on screen = ground level)
+              const isCorrect = ch.y > 0.65
+
+              ctx.beginPath()
+              ctx.arc(chX, chY, 18, 0, Math.PI * 2)
+              ctx.strokeStyle = isCorrect ? '#00ff44' : '#ff2222'
+              ctx.lineWidth = 3
+              ctx.globalAlpha = 0.9
+              ctx.stroke()
+
+              // Inner fill
+              ctx.beginPath()
+              ctx.arc(chX, chY, 18, 0, Math.PI * 2)
+              ctx.fillStyle = isCorrect ? '#00ff44' : '#ff2222'
+              ctx.globalAlpha = 0.15
+              ctx.fill()
+
+              // Label
+              ctx.fillStyle = isCorrect ? '#00ff44' : '#ff2222'
+              ctx.globalAlpha = 1.0
+              ctx.font = 'bold 11px Courier New'
+              ctx.fillText(
+                isCorrect ? 'ADDRESS ✓' : 'ADDRESS ✗',
+                chX + 22,
+                chY + 4
+              )
+            } else {
+              // All other frames — small white tracking dot
+              if (ch.conf > 0.3) {
+                ctx.beginPath()
+                ctx.arc(chX, chY, 5, 0, Math.PI * 2)
+                ctx.fillStyle = '#ffffff'
+                ctx.globalAlpha = 0.4 + ch.conf * 0.4
+                ctx.fill()
+              }
+            }
+
+            ctx.globalAlpha = 1.0
+          }
+        } else {
+          console.log('[Canvas] No landmarks_2d for frame', currentFrame,
+                      '| pose exists:', !!pose,
+                      '| pose keys:', pose ? Object.keys(pose) : 'none',
+                      '| nearest frameLookup keys:', Object.keys(frameLookup).slice(0, 5))
         }
       }
     } else {
@@ -140,6 +210,10 @@ export default function VideoCanvas({ videoRef }) {
     const handleTimeUpdate = () => {
       if (freezeActive || video.paused) return
       const currentFrame = Math.round(video.currentTime * videoFps)
+      console.log('[Freeze] currentFrame:', currentFrame,
+                  '| freezeFrames:', [...freezeFrames],
+                  '| freezeActive:', freezeActive,
+                  '| phases:', JSON.stringify(phases).substring(0, 200))
 
       // Update active phase
       const PHASE_ORDER = ['P1', 'P3', 'P4', 'P5', 'P7']
