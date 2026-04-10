@@ -32,7 +32,11 @@ export default function PlaybackControls({ videoRef }) {
   const togglePlay = () => {
     const v = videoRef?.current
     if (!v) return
-    playing ? v.pause() : v.play()
+    if (playing) {
+      v.pause()
+    } else {
+      v.play().catch(err => console.warn('[Play] rejected:', err))
+    }
   }
 
   const stepFrame = (dir) => {

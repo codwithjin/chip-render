@@ -1,48 +1,64 @@
 import useSwingStore from '../store/useSwingStore'
 
-const RESULT_STYLES = {
-  PASS:          { color: '#22c55e', label: 'PASS' },
-  FAIL:          { color: '#ef4444', label: 'FAIL' },
-  LOW_CONFIDENCE:{ color: '#f59e0b', label: 'LOW' },
-  CAMERA_LIMIT:  { color: '#6b7280', label: 'CAM' },
-  'GEMINI FLASH':{ color: '#8b5cf6', label: 'AI' },
-}
-
-// Hardcoded benchmarks from swing audit
-const BENCHMARKS = {
+// Metrics to show per phase, with pro benchmarks
+const PHASE_METRICS = {
   P1: [
-    { name: 'Spine Angle',       unit: '°',  lo: 38, hi: 42  },
-    { name: 'Trail Elbow',       unit: '°',  lo: 160, hi: 170 },
-    { name: 'Trail Knee Flex',   unit: '°',  lo: 20, hi: 25  },
-    { name: 'Lead Knee Flex',    unit: '°',  lo: 20, hi: 25  },
+    { key: 'spine_tilt',  name: 'Spine Tilt',  unit: '°', lo: 35,  hi: 45  },
+    { key: 'shaft_angle', name: 'Shaft Angle', unit: '°', lo: 55,  hi: 65  },
+    { key: 'lead_knee',   name: 'Lead Knee',   unit: '°', lo: 145, hi: 165 },
+    { key: 'trail_elbow', name: 'Trail Elbow', unit: '°', lo: 155, hi: 175 },
+  ],
+  P2: [
+    { key: 'shoulder_turn', name: 'Shoulder Turn',  unit: '°', lo: 10,  hi: 25  },
+    { key: 'hip_turn',      name: 'Hip Turn',       unit: '°', lo: 5,   hi: 15  },
+    { key: 'trail_elbow',   name: 'Trail Elbow',    unit: '°', lo: 155, hi: 175 },
   ],
   P3: [
-    { name: 'Shoulder Turn',     unit: '°',  lo: 50, hi: 56  },
-    { name: 'Hip Turn',          unit: '°',  lo: 25, hi: 30  },
-    { name: 'X-Factor',          unit: '°',  lo: 25, hi: 35  },
-    { name: 'Trail Elbow',       unit: '°',  lo: 100, hi: 110 },
+    { key: 'shoulder_turn', name: 'Shoulder Turn',  unit: '°', lo: 45,  hi: 60  },
+    { key: 'hip_turn',      name: 'Hip Turn',       unit: '°', lo: 20,  hi: 35  },
+    { key: 'x_factor',      name: 'X-Factor',       unit: '°', lo: 20,  hi: 35  },
+    { key: 'trail_elbow',   name: 'Trail Elbow',    unit: '°', lo: 85,  hi: 110 },
   ],
   P4: [
-    { name: 'Shoulder Turn',     unit: '°',  lo: 90, hi: 100 },
-    { name: 'Hip Turn',          unit: '°',  lo: 45, hi: 55  },
-    { name: 'X-Factor',          unit: '°',  lo: 45, hi: 55  },
-    { name: 'Trail Elbow',       unit: '°',  lo: 85, hi: 100 },
+    { key: 'shoulder_turn', name: 'Shoulder Turn',  unit: '°', lo: 85,  hi: 110 },
+    { key: 'hip_turn',      name: 'Hip Turn',       unit: '°', lo: 40,  hi: 55  },
+    { key: 'x_factor',      name: 'X-Factor',       unit: '°', lo: 40,  hi: 55  },
+    { key: 'trail_elbow',   name: 'Trail Elbow',    unit: '°', lo: 80,  hi: 100 },
   ],
   P5: [
-    { name: 'Hip Turn',          unit: '°',  lo: 55, hi: 65  },
-    { name: 'Shoulder Turn',     unit: '°',  lo: 80, hi: 90  },
+    { key: 'hip_turn',      name: 'Hip Turn',       unit: '°', lo: 50,  hi: 65  },
+    { key: 'shoulder_turn', name: 'Shoulder Turn',  unit: '°', lo: 75,  hi: 95  },
+    { key: 'x_factor',      name: 'X-Factor',       unit: '°', lo: 15,  hi: 35  },
+  ],
+  P6: [
+    { key: 'hip_turn',      name: 'Hip Turn',       unit: '°', lo: 50,  hi: 65  },
+    { key: 'shoulder_turn', name: 'Shoulder Turn',  unit: '°', lo: 45,  hi: 65  },
+    { key: 'lead_elbow',    name: 'Lead Elbow',     unit: '°', lo: 155, hi: 175 },
   ],
   P7: [
-    { name: 'Hip Turn',          unit: '°',  lo: 35, hi: 45  },
-    { name: 'Shoulder Turn',     unit: '°',  lo: 20, hi: 35  },
+    { key: 'hip_turn',      name: 'Hip Turn',       unit: '°', lo: 30,  hi: 50  },
+    { key: 'shoulder_turn', name: 'Shoulder Turn',  unit: '°', lo: 15,  hi: 35  },
+    { key: 'lead_knee',     name: 'Lead Knee',      unit: '°', lo: 150, hi: 175 },
   ],
+}
+
+function classify(value, lo, hi) {
+  if (value === null || value === undefined) return 'none'
+  return value >= lo && value <= hi ? 'pass' : 'fail'
+}
+
+const STATUS = {
+  pass: { color: '#22c55e', label: 'PASS' },
+  fail: { color: '#ef4444', label: 'FAIL' },
+  none: { color: '#4b5563', label: '—'    },
 }
 
 export default function MetricCards() {
   const { activePhase, metrics } = useSwingStore()
-  const phaseMetrics = metrics[activePhase] || BENCHMARKS[activePhase] || []
+  const defs    = PHASE_METRICS[activePhase] || []
+  const values  = metrics?.[activePhase] || {}
 
-  if (!phaseMetrics.length) {
+  if (!defs.length) {
     return (
       <div className="p-3 text-xs text-gray-600 text-center">
         No metrics for {activePhase}
@@ -51,28 +67,28 @@ export default function MetricCards() {
   }
 
   return (
-    <div className="flex flex-col gap-1 p-2 overflow-y-auto">
-      {phaseMetrics.map((m, i) => {
-        const style  = RESULT_STYLES[m.result] || RESULT_STYLES.LOW_CONFIDENCE
-        const hasVal = m.value !== null && m.value !== undefined
+    <div className="flex flex-col gap-1 p-2">
+      {defs.map(({ key, name, unit, lo, hi }) => {
+        const val    = values[key]
+        const status = classify(val, lo, hi)
+        const { color, label } = STATUS[status]
         return (
-          <div key={i}
+          <div
+            key={key}
             className="flex items-center justify-between px-2 py-1.5 rounded border border-gray-800 bg-[#0f1410]"
-            style={{ borderLeft: `3px solid ${style.color}` }}
+            style={{ borderLeft: `3px solid ${color}` }}
           >
-            <div className="flex flex-col">
-              <span className="text-xs text-gray-300">{m.name}</span>
-              {hasVal && (
-                <span className="text-xs font-mono text-gray-500">
-                  {m.value}{m.unit}
-                  {m.lo !== undefined && (
-                    <span className="text-gray-700 ml-1">({m.lo}–{m.hi})</span>
-                  )}
-                </span>
-              )}
+            <div className="flex flex-col min-w-0">
+              <span className="text-xs text-gray-300 truncate">{name}</span>
+              <span className="text-xs font-mono text-gray-500">
+                {val !== undefined && val !== null
+                  ? <>{val}{unit} <span className="text-gray-700">({lo}–{hi})</span></>
+                  : <span className="text-gray-700">{lo}–{hi}{unit}</span>
+                }
+              </span>
             </div>
-            <span className="text-xs font-bold" style={{ color: style.color }}>
-              {style.label}
+            <span className="text-xs font-bold ml-2 shrink-0" style={{ color }}>
+              {label}
             </span>
           </div>
         )

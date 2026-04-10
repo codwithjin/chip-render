@@ -233,7 +233,7 @@ export default function VideoCanvas({ videoRef }) {
                   '| phases:', JSON.stringify(phases).substring(0, 200))
 
       // Update active phase
-      const PHASE_ORDER = ['P1', 'P3', 'P4', 'P5', 'P7']
+      const PHASE_ORDER = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7']
       let currentPhase = 'P1'
       for (let i = PHASE_ORDER.length - 1; i >= 0; i--) {
         const key = PHASE_ORDER[i]
@@ -261,7 +261,7 @@ export default function VideoCanvas({ videoRef }) {
 
           freezeTimeoutRef.current = setTimeout(() => {
             setFreezeActive(false)
-            video.play()
+            video.play().catch(() => {})
           }, FREEZE_DURATION)
           break
         }

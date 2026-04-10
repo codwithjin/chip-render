@@ -41,7 +41,7 @@ export default function VideoUpload({ videoRef }) {
 
   const {
     resetSession, setVideoUrl, setProcessing, setProcessingDone,
-    setFrameLookup, setPhases, setSessionId, processing, videoFile,
+    setFrameLookup, setPhases, setMetrics, setSessionId, processing, videoFile,
     setVideoFile,
   } = useSwingStore()
 
@@ -98,6 +98,7 @@ export default function VideoUpload({ videoRef }) {
       setStatus('Detecting swing phases...')
       const phaseData = await detectPhases(result.frames, result.fps || 30)
       setPhases(phaseData)
+      if (phaseData.metrics) setMetrics(phaseData.metrics)
 
       // Save session to DB
       try {
