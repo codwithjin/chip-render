@@ -3,7 +3,7 @@ import useSwingStore from '../store/useSwingStore'
 // Metrics to show per phase, with pro benchmarks
 const PHASE_METRICS = {
   P1: [
-    { key: 'spine_tilt',  name: 'Spine Tilt',  unit: '°', lo: 35,  hi: 45  },
+    { key: 'forward_bend', name: 'Forward Bend', unit: '°', lo: 32, hi: 45 },
     { key: 'shaft_angle', name: 'Shaft Angle', unit: '°', lo: 55,  hi: 65  },
     { key: 'lead_knee',   name: 'Lead Knee',   unit: '°', lo: 145, hi: 165 },
     { key: 'trail_elbow', name: 'Trail Elbow', unit: '°', lo: 155, hi: 175 },

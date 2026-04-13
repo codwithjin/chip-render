@@ -735,7 +735,7 @@ def detect_phases():
                 'time_s': round(fi / fps, 3), 'detected': True}
 
     # ── Per-phase metric computation ───────────────────────────────────────────
-    def _metrics(fr):
+    def _metrics(fr, phase=None):
         """Compute measured biomechanical metrics from a phase frame dict."""
         m = {}
         if fr is None:
@@ -780,8 +780,12 @@ def detect_phases():
             v = angle_3pt(rh, rk, ra)
             if v is not None: m['trail_knee'] = round(v, 1)
 
-        # Spine tilt (total deviation of spine from vertical)
-        # In MediaPipe world coords Y increases downward; up = [0,-1,0]
+        # Forward bend — sagittal-plane forward tilt of spine from vertical.
+        # Uses Z component of normalised hip→shoulder vector in MediaPipe world coords.
+        # Z = depth axis (toward/away from camera); Y = vertical (negative = up).
+        # forward_bend = atan2(|sv_z|, |sv_y|)
+        # Coaching benchmark (down-the-line, 2D): 32-45°.
+        # Note: face-on camera underestimates this value vs down-the-line measurement.
         if ls and rs and lh and rh:
             sh_mid = np.array([(ls['x']+rs['x'])/2,
                                (ls['y']+rs['y'])/2,
@@ -793,30 +797,40 @@ def detect_phases():
             n  = float(np.linalg.norm(sv))
             if n > 1e-9:
                 sv /= n
-                cos_a = float(np.clip(-sv[1], -1.0, 1.0))   # dot with up=[0,-1,0]
-                m['spine_tilt'] = round(float(np.degrees(np.arccos(cos_a))), 1)
+                m['forward_bend'] = round(
+                    math.degrees(math.atan2(abs(float(sv[0])), abs(float(sv[1])))), 1
+                )
+                m['spine_angle_estimated'] = m['forward_bend']
+                m['spine_angle_confidence'] = 'placeholder'
 
         # Shaft angle — angle of club shaft from horizontal (face-on view).
         # Driver avg ~55°, irons ~60-65°. Benchmark 55-65°.
-        # Computed from YOLO 2D: atan2(|dy|, |dx|) where dy = head.y - handle.y
+        # Computed from YOLO 2D: atan2(dy, |dx|) where dy = head.y - handle.y
+        # P1 only: dy is unsigned so sign encodes lean direction.
+        #   dy < 0 → head above handle → forward lean (toward target).
+        #   dy > 0 → head below handle → backward lean (away from target).
+        # All other phases: abs(dy) preserves original magnitude-only behaviour.
         ch_det  = fr.get('club_head')
         hdl_det = fr.get('club_handle')
         if ch_det and hdl_det:
             dx = abs(ch_det['x'] - hdl_det['x'])
-            dy = abs(ch_det['y'] - hdl_det['y'])
-            if dx > 0.005 or dy > 0.005:
+            if phase == 'P1':
+                dy = ch_det['y'] - hdl_det['y']
+            else:
+                dy = abs(ch_det['y'] - hdl_det['y'])
+            if dx > 0.005 or abs(dy) > 0.005:
                 m['shaft_angle'] = round(math.degrees(math.atan2(dy, dx)), 1)
 
         return m
 
     phase_metrics = {
-        'P1': _metrics(p1_frame),
-        'P2': _metrics(p2_frame),
-        'P3': _metrics(p3_frame),
-        'P4': _metrics(p4_frame),
-        'P5': _metrics(p5_frame),
-        'P6': _metrics(p6_frame),
-        'P7': _metrics(p7_frame),
+        'P1': _metrics(p1_frame, phase='P1'),
+        'P2': _metrics(p2_frame, phase='P2'),
+        'P3': _metrics(p3_frame, phase='P3'),
+        'P4': _metrics(p4_frame, phase='P4'),
+        'P5': _metrics(p5_frame, phase='P5'),
+        'P6': _metrics(p6_frame, phase='P6'),
+        'P7': _metrics(p7_frame, phase='P7'),
     }
     print(f"[METRICS] P1={phase_metrics['P1']} P4={phase_metrics['P4']}", flush=True)
 
