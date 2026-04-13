@@ -1,0 +1,33 @@
+# Large binaries — excluded from railway up uploads
+# Models are baked into the Docker image via Dockerfile
+models/
+*.pt
+*.task
+
+# Training/dataset artifacts
+train/
+valid/
+test/
+dtl_male/
+data.yaml
+README.dataset.txt
+README.roboflow.txt
+
+# Video and output files
+*.mp4
+*.jpg
+*.png
+*.xlsx
+
+# Local dev
+__pycache__/
+*.pyc
+flask.log
+swing_data.json
+swing_data_v2.json
+speith_landmarks.json
+p4_success.jpg
+
+# Frontend build artifacts
+frontend/node_modules/
+static_react/
