@@ -780,6 +780,16 @@ def detect_phases():
             v = angle_3pt(rh, rk, ra)
             if v is not None: m['trail_knee'] = round(v, 1)
 
+        # P1 only — trail knee flex and status (DTL; trail = right side for RH golfer)
+        # Flex = 180° − joint angle (0° = straight leg, 25° = flexed).
+        # Pass: 12–28°  |  Fail: <10° or >35°
+        if phase == 'P1' and rh and rk and ra:
+            v = angle_3pt(rh, rk, ra)
+            if v is not None:
+                flex = round(180.0 - v, 1)
+                m['trail_knee_flex_p1'] = flex
+                m['trail_knee_status'] = 'pass' if 12.0 <= flex <= 28.0 else 'fail'
+
         # Forward bend — sagittal-plane forward tilt of spine from vertical.
         # Uses Z component of normalised hip→shoulder vector in MediaPipe world coords.
         # Z = depth axis (toward/away from camera); Y = vertical (negative = up).
@@ -820,6 +830,14 @@ def detect_phases():
                 dy = abs(ch_det['y'] - hdl_det['y'])
             if dx > 0.005 or abs(dy) > 0.005:
                 m['shaft_angle'] = round(math.degrees(math.atan2(dy, dx)), 1)
+                # P1 only — expose signed shaft angle and pass/fail status.
+                # shaft_angle_p1 is negated so positive = forward lean (toward target).
+                # (shaft_angle raw: dy = head.y - handle.y; negative when head above handle.)
+                # Pass: +2° to +10°  |  Fail: ≤0° or >12°
+                if phase == 'P1':
+                    sa = round(-m['shaft_angle'], 1)
+                    m['shaft_angle_p1'] = sa
+                    m['shaft_angle_status'] = 'pass' if 2.0 <= sa <= 10.0 else 'fail'
 
         return m
 
