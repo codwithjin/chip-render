@@ -782,13 +782,13 @@ def detect_phases():
 
         # P1 only — trail knee flex and status (DTL; trail = right side for RH golfer)
         # Flex = 180° − joint angle (0° = straight leg, 25° = flexed).
-        # Pass: 12–28°  |  Fail: <10° or >35°
+        # Internal pass: 12–35°  |  Display target: 15–30°  |  Fail: <12° or >35°
         if phase == 'P1' and rh and rk and ra:
             v = angle_3pt(rh, rk, ra)
             if v is not None:
                 flex = round(180.0 - v, 1)
                 m['trail_knee_flex_p1'] = flex
-                m['trail_knee_status'] = 'pass' if 12.0 <= flex <= 28.0 else 'fail'
+                m['trail_knee_status'] = 'pass' if 12.0 <= flex <= 35.0 else 'fail'
 
         # Forward bend — sagittal-plane forward tilt of spine from vertical.
         # Uses Z component of normalised hip→shoulder vector in MediaPipe world coords.
@@ -815,27 +815,20 @@ def detect_phases():
 
         # Shaft angle — angle of club shaft from horizontal (face-on view).
         # Driver avg ~55°, irons ~60-65°. Benchmark 55-65°.
-        # Computed from YOLO 2D: atan2(dy, |dx|) where dy = head.y - handle.y
-        # P1 only: dy is unsigned so sign encodes lean direction.
-        #   dy < 0 → head above handle → forward lean (toward target).
-        #   dy > 0 → head below handle → backward lean (away from target).
-        # All other phases: abs(dy) preserves original magnitude-only behaviour.
+        # Computed from YOLO 2D: atan2(|dy|, |dx|).
+        # P1 only: shaft_angle_p1 = abs value; pass 2–10°, fail <2° or >12°.
+        # All other phases: magnitude-only behaviour unchanged.
         ch_det  = fr.get('club_head')
         hdl_det = fr.get('club_handle')
         if ch_det and hdl_det:
             dx = abs(ch_det['x'] - hdl_det['x'])
-            if phase == 'P1':
-                dy = ch_det['y'] - hdl_det['y']
-            else:
-                dy = abs(ch_det['y'] - hdl_det['y'])
-            if dx > 0.005 or abs(dy) > 0.005:
+            dy = abs(ch_det['y'] - hdl_det['y'])
+            if dx > 0.005 or dy > 0.005:
                 m['shaft_angle'] = round(math.degrees(math.atan2(dy, dx)), 1)
-                # P1 only — expose signed shaft angle and pass/fail status.
-                # shaft_angle_p1 is negated so positive = forward lean (toward target).
-                # (shaft_angle raw: dy = head.y - handle.y; negative when head above handle.)
-                # Pass: +2° to +10°  |  Fail: ≤0° or >12°
+                # P1 only — absolute shaft angle with pass/fail status.
+                # Pass: 2–10°  |  Fail: <2° or >12°
                 if phase == 'P1':
-                    sa = round(-m['shaft_angle'], 1)
+                    sa = abs(m['shaft_angle'])
                     m['shaft_angle_p1'] = sa
                     m['shaft_angle_status'] = 'pass' if 2.0 <= sa <= 10.0 else 'fail'
 

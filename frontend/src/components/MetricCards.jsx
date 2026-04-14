@@ -5,7 +5,7 @@ const PHASE_METRICS = {
   P1: [
     { key: 'forward_bend', name: 'Forward Bend', unit: '°', lo: 32, hi: 45 },
     { key: 'shaft_angle', name: 'Shaft Angle', unit: '°', lo: 55,  hi: 65  },
-    { key: 'trail_knee_flex_p1', name: 'Trail Knee Flex', unit: '°', lo: 12, hi: 28 },
+    { key: 'trail_knee_flex_p1', name: 'Trail Knee Flex', unit: '°', lo: 15, hi: 30 },
     { key: 'trail_elbow', name: 'Trail Elbow', unit: '°', lo: 155, hi: 175 },
   ],
   P2: [
