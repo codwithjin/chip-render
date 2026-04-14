@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11.9-slim
 
 # Cache-bust: 2026-04-14a
 # System deps for MediaPipe + Node for React build
