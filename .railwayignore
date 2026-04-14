@@ -1,9 +1,3 @@
-# Large binaries — excluded from railway up uploads
-# Models are baked into the Docker image via Dockerfile
-models/
-*.pt
-*.task
-
 # Training/dataset artifacts
 train/
 valid/
