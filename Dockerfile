@@ -26,6 +26,7 @@ RUN cd frontend && npm run build
 
 # Copy models explicitly (ensures cache invalidation when models change)
 COPY models/ models/
+RUN echo "=== models ===" && ls -lh /app/models/ || echo "models dir missing"
 
 # Copy rest of application
 COPY . .
