@@ -25,7 +25,10 @@ RUN cd frontend && npm ci
 COPY frontend/ frontend/
 RUN cd frontend && npm run build
 
-# Copy models explicitly (ensures cache invalidation when models change)
+# Force cache invalidation — increment BUILD_ID to bust Railway's layer cache
+ENV BUILD_ID=2026-04-14-02
+
+# Copy models explicitly
 COPY models/ models/
 RUN echo "=== models ===" && ls -lh /app/models/ || echo "models dir missing"
 
