@@ -169,18 +169,28 @@ def run_mediapipe(video_path, job_id):
         width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        print(f"[MediaPipe] FPS:{fps} Frames:{total} Size:{width}x{height}", flush=True)
+        # Skip frames so we process at most ~30fps effective rate.
+        # iPhone slo-mo at 120/240fps would otherwise process 4-8x more
+        # frames than needed for phase detection.
+        skip = max(1, round(fps / 30.0))
+        frames_to_process = max(1, total // skip)
+        print(f"[MediaPipe] FPS:{fps} Frames:{total} Size:{width}x{height} skip:{skip} effective:{frames_to_process}", flush=True)
 
         with jobs_lock:
-            jobs[job_id]['total'] = total
+            jobs[job_id]['total'] = frames_to_process
 
         frames_out = []
         frame_num  = 0
+        processed  = 0
 
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
+
+            if frame_num % skip != 0:
+                frame_num += 1
+                continue
 
             rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
@@ -256,10 +266,11 @@ def run_mediapipe(video_path, job_id):
             fd['golf_ball'] = golf_ball
 
             frames_out.append(fd)
-            frame_num += 1
+            processed  += 1
+            frame_num  += 1
 
             with jobs_lock:
-                jobs[job_id]['progress'] = frame_num
+                jobs[job_id]['progress'] = processed
 
         cap.release()
         landmarker.close()
@@ -274,7 +285,7 @@ def run_mediapipe(video_path, job_id):
         }
 
         pose_frame_count = sum(1 for f in frames_out if f['poses'])
-        print(f"[MediaPipe] Done. Pose frames: {pose_frame_count}/{frame_num}", flush=True)
+        print(f"[MediaPipe] Done. Pose frames: {pose_frame_count}/{processed} (skip={skip}, source={total})", flush=True)
 
         with jobs_lock:
             jobs[job_id]['status'] = 'done'
