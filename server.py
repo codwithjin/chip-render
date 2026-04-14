@@ -597,8 +597,6 @@ def detect_phases():
     p3_idx, p3_frame = None, None
     arm_b_angles, arm_b_rels, arm_b_ents = [], [], []
     for fi, wy, fr in post_p1:
-        if p4_idx is not None and fi >= p4_idx:
-            break
         lm15 = lm3(fr, 15); lm11 = lm3(fr, 11); lm13 = lm3(fr, 13)
         if not lm15 or not lm11 or not lm13:
             continue
