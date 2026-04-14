@@ -50,6 +50,26 @@ def _ensure_yolo_model():
 
 _ensure_yolo_model()
 
+MEDIAPIPE_MODEL_PATH = os.path.join(BASE_DIR, 'pose_landmarker_heavy.task')
+_MEDIAPIPE_DOWNLOAD_URL = (
+    'https://storage.googleapis.com/mediapipe-models/pose_landmarker/'
+    'pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task'
+)
+
+def _ensure_mediapipe_model():
+    """Download MediaPipe pose landmarker if missing (gitignored, not in Railway image)."""
+    if os.path.exists(MEDIAPIPE_MODEL_PATH):
+        return
+    import urllib.request
+    print('[MediaPipe] Model missing — downloading from Google Storage...', flush=True)
+    try:
+        urllib.request.urlretrieve(_MEDIAPIPE_DOWNLOAD_URL, MEDIAPIPE_MODEL_PATH)
+        print(f'[MediaPipe] Download complete: {MEDIAPIPE_MODEL_PATH}', flush=True)
+    except Exception as e:
+        print(f'[MediaPipe] Download failed: {e}', flush=True)
+
+_ensure_mediapipe_model()
+
 yolo_model = None
 if os.path.exists(YOLO_MODEL_PATH):
     yolo_model = YOLO(YOLO_MODEL_PATH)
@@ -134,7 +154,7 @@ def run_mediapipe(video_path, job_id):
         print(f"[MediaPipe] Starting job {job_id}", flush=True)
         print(f"[MediaPipe] Video: {video_path}", flush=True)
 
-        model_path = os.path.join(BASE_DIR, 'pose_landmarker_heavy.task')
+        model_path = MEDIAPIPE_MODEL_PATH
         base_options = mp_python.BaseOptions(model_asset_path=model_path)
         options = mp_vision.PoseLandmarkerOptions(
             base_options=base_options,
