@@ -611,7 +611,7 @@ def detect_phases():
         for i in range(len(aa_sm)):
             raw_i     = min(i + aa_off, len(arm_b_ents) - 1)
             wrist_rel = arm_b_rels[raw_i]
-            if abs(aa_sm[i]) <= 10.0 and abs(wrist_rel) <= 0.05:
+            if abs(abs(aa_sm[i]) - 180.0) <= 10.0 and abs(wrist_rel) <= 0.05:
                 p3_idx   = arm_b_ents[raw_i][0]
                 p3_frame = arm_b_ents[raw_i][1]
                 print(f"[PHASES] P3 arm horizontal (geometry): frame={p3_idx}", flush=True)
