@@ -30,6 +30,26 @@ jobs = {}           # job_id → job dict
 jobs_lock = threading.Lock()
 
 YOLO_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'golf_driver_v2_best.pt')
+_YOLO_DOWNLOAD_URL = (
+    'https://github.com/codwithjin/chip-render/raw/master/'
+    'models/golf_driver_v2_best.pt'
+)
+
+def _ensure_yolo_model():
+    """Download YOLO model if missing (handles Railway build-cache stripping models/)."""
+    if os.path.exists(YOLO_MODEL_PATH):
+        return
+    import urllib.request
+    os.makedirs(os.path.dirname(YOLO_MODEL_PATH), exist_ok=True)
+    print(f'[YOLO] Model missing — downloading from GitHub...', flush=True)
+    try:
+        urllib.request.urlretrieve(_YOLO_DOWNLOAD_URL, YOLO_MODEL_PATH)
+        print(f'[YOLO] Download complete: {YOLO_MODEL_PATH}', flush=True)
+    except Exception as e:
+        print(f'[YOLO] Download failed: {e}', flush=True)
+
+_ensure_yolo_model()
+
 yolo_model = None
 if os.path.exists(YOLO_MODEL_PATH):
     yolo_model = YOLO(YOLO_MODEL_PATH)
