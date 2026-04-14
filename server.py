@@ -225,7 +225,6 @@ def run_mediapipe(video_path, job_id):
                     yolo_results = yolo_model(
                         frame, verbose=False, conf=0.25)
                     if yolo_results:
-                        print(f"[YOLO] Class names: {yolo_results[0].names}", flush=True)
                         for box in yolo_results[0].boxes:
                             x1, y1, x2, y2 = box.xyxy[0].tolist()
                             cx = (x1 + x2) / 2
