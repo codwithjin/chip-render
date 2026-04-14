@@ -24,6 +24,9 @@ RUN cd frontend && npm ci
 COPY frontend/ frontend/
 RUN cd frontend && npm run build
 
+# Copy models explicitly (ensures cache invalidation when models change)
+COPY models/ models/
+
 # Copy rest of application
 COPY . .
 
