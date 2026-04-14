@@ -589,38 +589,32 @@ def detect_phases():
                 break
 
     # P3 — Lead arm parallel to floor (backswing)
-    # Geometry: compute lead arm angle from horizontal using lm11 (shoulder),
-    # lm13 (elbow), lm15 (wrist) in world coords.
-    # arm_angle = atan2(dy, dx) where dx/dy = wrist - shoulder.
-    # wrist_rel  = lm15.y - lm11.y  (positive = wrist below shoulder)
-    # P3 = first frame where |arm_angle| <= 10° AND |wrist_rel| <= 0.05.
+    # Signal: lm15_3d.y − lm11_3d.y  (world coords, Y increases downward)
+    #   > 0  : wrist below shoulder  (address, early backswing)
+    #   = 0  : arm horizontal        ← P3
+    #   < 0  : wrist above shoulder  (arm rising past horizontal toward top)
+    # Detect: first zero-crossing positive → negative.
     p3_idx, p3_frame = None, None
-    arm_b_angles, arm_b_rels, arm_b_ents = [], [], []
+    arm_b_diffs, arm_b_ents = [], []
     for fi, wy, fr in post_p1:
-        if p4_idx is not None and fi >= p4_idx:
-            break
-        lm15 = lm3(fr, 15); lm11 = lm3(fr, 11); lm13 = lm3(fr, 13)
-        if not lm15 or not lm11 or not lm13:
+        lm15 = lm3(fr, 15); lm11 = lm3(fr, 11)
+        if not lm15 or not lm11:
             continue
-        dx = lm15['x'] - lm11['x']
-        dy = lm15['y'] - lm11['y']
-        arm_b_angles.append(math.degrees(math.atan2(dy, dx)))
-        arm_b_rels.append(lm15['y'] - lm11['y'])
+        arm_b_diffs.append(lm15['y'] - lm11['y'])
         arm_b_ents.append((fi, fr))
 
-    if len(arm_b_angles) >= 7:
-        aa_sm, aa_off = _sm(np.array(arm_b_angles), sigma=3)
-        for i in range(len(aa_sm)):
-            raw_i     = min(i + aa_off, len(arm_b_ents) - 1)
-            wrist_rel = arm_b_rels[raw_i]
-            if abs(aa_sm[i]) <= 10.0 and abs(wrist_rel) <= 0.05:
+    if len(arm_b_diffs) >= 7:
+        ab_sm, ab_off = _sm(np.array(arm_b_diffs), sigma=3)
+        for i in range(1, len(ab_sm)):
+            if ab_sm[i-1] >= 0 and ab_sm[i] < 0:
+                raw_i    = min(i + ab_off, len(arm_b_ents) - 1)
                 p3_idx   = arm_b_ents[raw_i][0]
                 p3_frame = arm_b_ents[raw_i][1]
-                print(f"[PHASES] P3 arm horizontal (geometry): frame={p3_idx}", flush=True)
+                print(f"[PHASES] P3 arm horizontal: frame={p3_idx}", flush=True)
                 break
 
     if p3_idx is None:
-        print("[PHASES] P3 not detected — no arm horizontal frame found", flush=True)
+        print("[PHASES] P3 not detected — no arm zero-crossing", flush=True)
 
     # P4 — Top of backswing
     # Trail wrist (lm16) world-Y first local minimum after P3.
@@ -881,13 +875,12 @@ def detect_phases():
             dy = abs(ch_det['y'] - hdl_det['y'])
             if dx > 0.005 or dy > 0.005:
                 m['shaft_angle'] = round(math.degrees(math.atan2(dy, dx)), 1)
-                # P1 only — signed shaft lean; negative = forward (pass).
-                # Pass: -2° to -10°  |  Fail: >= 0° (backward) or < -12° (too steep)
+                # P1 only — absolute shaft angle with pass/fail status.
+                # Pass: 2–10°  |  Fail: <2° or >12°
                 if phase == 'P1':
-                    dy_signed = ch_det['y'] - hdl_det['y']  # preserve sign
-                    sa = round(math.degrees(math.atan2(dy_signed, dx)), 1)
+                    sa = abs(m['shaft_angle'])
                     m['shaft_angle_p1'] = sa
-                    m['shaft_angle_status'] = 'pass' if -10.0 <= sa <= -2.0 else 'fail'
+                    m['shaft_angle_status'] = 'pass' if 2.0 <= sa <= 10.0 else 'fail'
 
         return m
 
