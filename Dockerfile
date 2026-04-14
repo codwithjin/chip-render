@@ -1,5 +1,6 @@
 FROM python:3.11-slim
 
+# Cache-bust: 2026-04-14a
 # System deps for MediaPipe + Node for React build
 RUN apt-get update && apt-get install -y \
     libgl1 \
