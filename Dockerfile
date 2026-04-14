@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     nodejs \
     npm \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
