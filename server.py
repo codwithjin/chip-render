@@ -136,14 +136,18 @@ def process_video():
             'filename':   f.filename,
         }
 
+    rotation = int(request.form.get('rotation', 0))
+    start_ms = float(request.form.get('start_ms', 0))
+    end_ms   = float(request.form.get('end_ms', 9999999))
+
     t = threading.Thread(target=run_mediapipe,
-                         args=(tmp.name, job_id),
+                         args=(tmp.name, job_id, start_ms, end_ms, rotation),
                          daemon=True)
     t.start()
     return jsonify({'job_id': job_id})
 
 
-def run_mediapipe(video_path, job_id):
+def run_mediapipe(video_path, job_id, start_ms=0, end_ms=9999999, rotation=0):
     try:
         print(f"[MediaPipe] Starting job {job_id}", flush=True)
         print(f"[MediaPipe] Video: {video_path}", flush=True)
@@ -178,8 +182,14 @@ def run_mediapipe(video_path, job_id):
         processed  = 0
 
         while cap.isOpened():
+            pos_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
             ret, frame = cap.read()
             if not ret:
+                break
+            if pos_ms < start_ms:
+                frame_num += 1
+                continue
+            if pos_ms > end_ms:
                 break
 
             if frame_num % skip != 0:
@@ -205,9 +215,18 @@ def run_mediapipe(video_path, job_id):
                 for jid in JOINT_IDS:
                     lm2 = result.pose_landmarks[0][jid]
                     lm3 = result.pose_world_landmarks[0][jid]
+                    x_n, y_n = lm2.x, lm2.y
+                    if rotation == 90:
+                        d_x, d_y = y_n, 1 - x_n
+                    elif rotation == 270:
+                        d_x, d_y = 1 - y_n, x_n
+                    elif rotation == 180:
+                        d_x, d_y = 1 - x_n, 1 - y_n
+                    else:
+                        d_x, d_y = x_n, y_n
                     entry['landmarks_2d'][str(jid)] = {
-                        'x':          round(lm2.x, 6),
-                        'y':          round(lm2.y, 6),
+                        'x':          round(d_x, 6),
+                        'y':          round(d_y, 6),
                         'z':          round(lm2.z, 6),
                         'visibility': round(lm2.visibility, 4),
                     }
@@ -441,11 +460,7 @@ def detect_phases():
         if f.get('club_head'):
             club_lookup[f['frame']] = f['club_head']
 
-    # Build club head position lookup by frame number
-    club_head_by_frame = club_lookup
-
-    print(f"[PHASES] Club head detected in "
-          f"{len(club_lookup)}/{len(frames)} frames")
+    print(f"[PHASES] Club head detected in {len(club_lookup)}/{len(frames)} frames")
 
     def lm3(frame, jid):
         try:
@@ -453,36 +468,30 @@ def detect_phases():
         except Exception:
             return None
 
-    def rot_xz(a, b):
-        return math.degrees(math.atan2(b['z'] - a['z'], b['x'] - a['x']))
+    def normalize(v):
+        n = np.linalg.norm(v)
+        return v / n if n > 1e-9 else v
 
-    def midpt(a, b):
-        return {k: (a[k] + b[k]) / 2 for k in ['x', 'y', 'z']}
+    def proj_plane(p, n_hat):
+        p_arr = np.array([p['x'], p['y'], p['z']])
+        return p_arr - np.dot(p_arr, n_hat) * n_hat
 
-    def dist3d(a, b):
-        return math.sqrt(sum((a[k] - b[k]) ** 2 for k in ['x', 'y', 'z']))
+    def angle_3pt(a, b, c):
+        v1 = np.array([a['x']-b['x'], a['y']-b['y'], a['z']-b['z']])
+        v2 = np.array([c['x']-b['x'], c['y']-b['y'], c['z']-b['z']])
+        cos_a = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-9)
+        return degrees(acos(np.clip(cos_a, -1, 1)))
 
-    def angle_3pt(ja, jb, jc):
-        ba = {k: ja[k] - jb[k] for k in ['x', 'y', 'z']}
-        bc = {k: jc[k] - jb[k] for k in ['x', 'y', 'z']}
-        dot    = sum(ba[k] * bc[k] for k in ['x', 'y', 'z'])
-        mag_ba = math.sqrt(sum(ba[k] ** 2 for k in ['x', 'y', 'z']))
-        mag_bc = math.sqrt(sum(bc[k] ** 2 for k in ['x', 'y', 'z']))
-        if mag_ba * mag_bc == 0:
-            return None
-        return math.degrees(math.acos(max(-1, min(1, dot / (mag_ba * mag_bc)))))
+    def gaussian_smooth(arr, sigma):
+        ks = sigma * 2 + 1
+        xk = np.arange(ks) - ks // 2
+        g  = np.exp(-xk**2 / (2 * sigma**2))
+        g /= g.sum()
+        if len(arr) >= ks:
+            return np.convolve(arr, g, mode='valid'), ks // 2
+        return np.array(arr), 0
 
-    def angle_3pt_lm(frame, a, b, c):
-        try:
-            lm3d = frame['poses'][0]['landmarks_3d']
-            ja = lm3d.get(str(a)); jb = lm3d.get(str(b)); jc = lm3d.get(str(c))
-            if not all([ja, jb, jc]):
-                return None
-            return angle_3pt(ja, jb, jc)
-        except Exception:
-            return None
-
-    # Trail wrist Y series (joint 16)
+    # Trail wrist Y series (joint 16) — used for P1 detection
     rw = [
         (fi, f['poses'][0]['landmarks_3d'].get('16', {}).get('y', 0), f)
         for fi, f in pose_frames
@@ -492,7 +501,7 @@ def detect_phases():
     if not rw:
         return jsonify({'error': 'No wrist data'}), 400
 
-    # P1 — first stable 10-frame window
+    # P1 — Address: first stable 10-frame window (trail wrist lm16 world-Y)
     p1_frame = rw[0][2]
     p1_idx   = rw[0][0]
     for i in range(len(rw) - 10):
@@ -502,188 +511,152 @@ def detect_phases():
             p1_idx   = rw[i][0]
             break
 
-    lh1        = lm3(p1_frame, 23)
-    rh1        = lm3(p1_frame, 24)
-    hip_rot_p1 = rot_xz(lh1, rh1) if lh1 and rh1 else 0
+    # Foundational math — compute once before phase detection
+    # SVD swing plane from all lm15 world positions
+    lm15_positions = []
+    for fi, f in pose_frames:
+        lm15 = lm3(f, 15)
+        if lm15:
+            lm15_positions.append([lm15['x'], lm15['y'], lm15['z']])
 
-    lm_ls_p1      = lm3(p1_frame, 11)
-    lm_rs_p1      = lm3(p1_frame, 12)
-    shoulder_rot_p1 = rot_xz(lm_ls_p1, lm_rs_p1) if lm_ls_p1 and lm_rs_p1 else 0
+    if len(lm15_positions) >= 3:
+        lm15_arr = np.array(lm15_positions)
+        centroid = lm15_arr.mean(axis=0)
+        _, _, Vt = np.linalg.svd(lm15_arr - centroid)
+        n_hat    = Vt[-1]
+        norm     = np.linalg.norm(n_hat)
+        n_hat    = n_hat / norm if norm > 1e-9 else np.array([0.0, 0.0, 1.0])
+    else:
+        n_hat = np.array([0.0, 0.0, 1.0])
 
-    p1_rw_y = next((wy for fi, wy, fr in rw if fi == p1_idx), rw[0][1])
-    rw_y_p1 = rw[0][1]
-    post_p1 = [(fi, wy, fr) for fi, wy, fr in rw if fi > p1_idx]
+    # Canonicalize: flip n_hat if mean early-backswing omega is negative
+    early_bs_pts = []
+    for fi, f in pose_frames:
+        if fi < p1_idx:
+            continue
+        lm15 = lm3(f, 15)
+        if lm15:
+            early_bs_pts.append(np.array([lm15['x'], lm15['y'], lm15['z']]))
+        if len(early_bs_pts) >= 20:
+            break
 
-    # Swing plane normal + spine axis from P1 landmarks
-    post_p1_wrist_pos = [lm3(fr, 16) for fi, wy, fr in rw if fi >= p1_idx]
-    n_hat = compute_swing_plane([p for p in post_p1_wrist_pos if p is not None])
+    if len(early_bs_pts) >= 3:
+        omegas = []
+        for i in range(1, len(early_bs_pts) - 1):
+            v1 = early_bs_pts[i]   - early_bs_pts[i-1]
+            v2 = early_bs_pts[i+1] - early_bs_pts[i]
+            omega_vec = np.cross(v1, v2)
+            omegas.append(np.dot(omega_vec, n_hat))
+        if omegas and np.mean(omegas) < 0:
+            n_hat = -n_hat
 
-    if all([lm_ls_p1, lm_rs_p1, lh1, rh1]):
-        sh_mid_p1 = {k: (lm_ls_p1[k] + lm_rs_p1[k]) / 2 for k in ['x', 'y', 'z']}
-        hp_mid_p1 = {k: (lh1[k] + rh1[k]) / 2 for k in ['x', 'y', 'z']}
-        s_hat = compute_spine_axis(sh_mid_p1, hp_mid_p1)
+    # Spine axis s_hat = normalize(shoulder_mid - hip_mid)
+    lm_ls_p1 = lm3(p1_frame, 11)
+    lm_rs_p1 = lm3(p1_frame, 12)
+    lh1      = lm3(p1_frame, 23)
+    rh1      = lm3(p1_frame, 24)
+
+    if lm_ls_p1 and lm_rs_p1 and lh1 and rh1:
+        sh_mid_p1 = np.array([(lm_ls_p1['x']+lm_rs_p1['x'])/2,
+                               (lm_ls_p1['y']+lm_rs_p1['y'])/2,
+                               (lm_ls_p1['z']+lm_rs_p1['z'])/2])
+        hp_mid_p1 = np.array([(lh1['x']+rh1['x'])/2,
+                               (lh1['y']+rh1['y'])/2,
+                               (lh1['z']+rh1['z'])/2])
+        s_hat = normalize(sh_mid_p1 - hp_mid_p1)
     else:
         s_hat = np.array([0.0, 1.0, 0.0])
 
-    hip_ref_vec = None; sh_ref_vec = None
+    # Reference vectors at P1
+    hip_ref_vec = None
+    sh_ref_vec  = None
     if lh1 and rh1:
-        hip_ref_vec = np.array([rh1['x'] - lh1['x'],
-                                rh1['y'] - lh1['y'],
-                                rh1['z'] - lh1['z']])
+        hip_ref_vec = np.array([rh1['x']-lh1['x'],
+                                 rh1['y']-lh1['y'],
+                                 rh1['z']-lh1['z']])
     if lm_ls_p1 and lm_rs_p1:
-        sh_ref_vec  = np.array([lm_rs_p1['x'] - lm_ls_p1['x'],
-                                lm_rs_p1['y'] - lm_ls_p1['y'],
-                                lm_rs_p1['z'] - lm_ls_p1['z']])
+        sh_ref_vec  = np.array([lm_rs_p1['x']-lm_ls_p1['x'],
+                                 lm_rs_p1['y']-lm_ls_p1['y'],
+                                 lm_rs_p1['z']-lm_ls_p1['z']])
+
     print(f"[PHASES] n_hat={n_hat.round(3).tolist()} s_hat={s_hat.round(3).tolist()}", flush=True)
 
-    # ── Gaussian smooth helper (shared by P2/P3/P5/P6) ──────────────
-    def _sm(arr, sigma):
-        ks  = sigma * 2 + 1
-        xk  = np.arange(ks) - ks // 2
-        g   = np.exp(-xk**2 / (2 * sigma**2))
-        g  /= g.sum()
-        if len(arr) >= ks:
-            return np.convolve(arr, g, mode='valid'), ks // 2
-        return np.array(arr), 0
+    post_p1 = [(fi, wy, fr) for fi, wy, fr in rw if fi > p1_idx]
 
-    # P2 — Club shaft parallel to floor (takeaway)
-    # Signal: |club_head.y − club_handle.y| in normalised 2D image coords.
-    # Y increases downward in image; shaft horizontal = both at same Y.
-    # First local minimum of smoothed |Δy| = shaft most horizontal.
-    # Fallback: first frame hip rotation > 5° (takeaway started).
-    p2_frame = p2_idx = None
-    shaft_b_diffs, shaft_b_ents = [], []
-    for fi, wy, fr in post_p1:
-        ch  = fr.get('club_head')
-        hdl = fr.get('club_handle')
-        if not ch or not hdl:
-            continue
-        shaft_b_diffs.append(abs(ch['y'] - hdl['y']))
-        shaft_b_ents.append((fi, fr))
-
-    if len(shaft_b_diffs) >= 11:
-        sb_sm, sb_off = _sm(np.array(shaft_b_diffs), sigma=5)
-        dsb = np.diff(sb_sm)
-        for i in range(1, len(dsb)):
-            if dsb[i-1] < 0 and dsb[i] >= 0:
-                raw_i    = min(i + sb_off, len(shaft_b_ents) - 1)
-                p2_idx   = shaft_b_ents[raw_i][0]
-                p2_frame = shaft_b_ents[raw_i][1]
-                print(f"[PHASES] P2 club horizontal: frame={p2_idx}", flush=True)
-                break
-
-    # Fallback: hip rotation > 5°
-    if p2_idx is None:
-        for fi, wy, fr in post_p1:
-            lh = lm3(fr, 23); rh = lm3(fr, 24)
-            if lh and rh and hip_ref_vec is not None and \
-               segment_rotation(lh, rh, hip_ref_vec, s_hat) > 5:
-                p2_frame = fr; p2_idx = fi
-                print(f"[PHASES] P2 fallback hip rotation: frame={p2_idx}", flush=True)
-                break
-
-    # P3 — Lead arm parallel to floor (backswing)
-    # Signal: lm15_3d.y − lm11_3d.y  (world coords, Y increases downward)
-    #   > 0  : wrist below shoulder  (address, early backswing)
-    #   = 0  : arm horizontal        ← P3
-    #   < 0  : wrist above shoulder  (arm rising past horizontal toward top)
-    # Detect: first zero-crossing positive → negative.
+    # P3 — Halfway Back
+    # wrist_rise >= 0.15 and elbow_fold >= 15 degrees
     p3_idx, p3_frame = None, None
-    arm_b_diffs, arm_b_ents = [], []
-    for fi, wy, fr in post_p1:
-        lm15 = lm3(fr, 15); lm11 = lm3(fr, 11)
-        if not lm15 or not lm11:
-            continue
-        arm_b_diffs.append(lm15['y'] - lm11['y'])
-        arm_b_ents.append((fi, fr))
+    lm16_p1 = lm3(p1_frame, 16)
+    lm15_p1 = lm3(p1_frame, 15)
+    lm13_p1 = lm3(p1_frame, 13)
+    lm11_p1 = lm3(p1_frame, 11)
 
-    if len(arm_b_diffs) >= 7:
-        ab_sm, ab_off = _sm(np.array(arm_b_diffs), sigma=3)
-        for i in range(1, len(ab_sm)):
-            if ab_sm[i-1] >= 0 and ab_sm[i] < 0:
-                raw_i    = min(i + ab_off, len(arm_b_ents) - 1)
-                p3_idx   = arm_b_ents[raw_i][0]
-                p3_frame = arm_b_ents[raw_i][1]
-                print(f"[PHASES] P3 arm horizontal: frame={p3_idx}", flush=True)
-                break
+    p1_wrist_y   = lm16_p1['y'] if lm16_p1 else None
+    p1_elbow_ang = (angle_3pt(lm15_p1, lm13_p1, lm11_p1)
+                    if (lm15_p1 and lm13_p1 and lm11_p1) else None)
 
-    if p3_idx is None:
-        print("[PHASES] P3 not detected — no arm zero-crossing", flush=True)
-
-    # P4 — Top of backswing
-    # Trail wrist (lm16) world-Y first local minimum after P3.
-    # Smoothed with Gaussian σ=9. First valley = wrist peaks = top.
-    # No window bound needed — first local min occurs before follow-through.
-    # Validated: frame 222 on SPEITH_DRIVER.MP4 (ground truth 7.4s).
-
-    p4_idx, p4_frame = None, None
-
-    def _gauss_sm(arr, sigma):
-        ks  = sigma * 2 + 1
-        xk  = np.arange(ks) - ks // 2
-        g   = np.exp(-xk**2 / (2 * sigma**2))
-        g  /= g.sum()
-        if len(arr) >= ks:
-            return np.convolve(arr, g, mode='valid'), ks // 2
-        return np.array(arr), 0
-
-    # Build trail wrist Y series from P3 onward (rw already tracks lm16 Y)
-    search_start = p3_idx or p1_idx
-    post_p3_rw   = [(fi, wy, fr) for fi, wy, fr in rw if fi > search_start]
-
-    if len(post_p3_rw) < 20:
-        print("[P4] insufficient frames after P3", flush=True)
-    else:
-        ly_vals = np.array([wy for fi, wy, fr in post_p3_rw])
-        ly_ents = [(fi, fr) for fi, wy, fr in post_p3_rw]
-
-        ly_sm, ly_off = _gauss_sm(ly_vals, sigma=9)
-        dy = np.diff(ly_sm)
-
-        for i in range(1, len(dy)):
-            if dy[i-1] < 0 and dy[i] >= 0:
-                raw_i    = i + ly_off
-                p4_idx   = ly_ents[min(raw_i, len(ly_ents)-1)][0]
-                p4_frame = ly_ents[min(raw_i, len(ly_ents)-1)][1]
-                print(f"[PHASES] P4 confirmed: frame={p4_idx} "
-                      f"lm16_y={ly_sm[i]:.5f}",
+    if p1_wrist_y is not None and p1_elbow_ang is not None:
+        for fi, wy, fr in post_p1:
+            lm16 = lm3(fr, 16)
+            lm15 = lm3(fr, 15)
+            lm13 = lm3(fr, 13)
+            lm11 = lm3(fr, 11)
+            if not (lm16 and lm15 and lm13 and lm11):
+                continue
+            wrist_rise = (p1_wrist_y - lm16['y']) / (abs(p1_wrist_y) + 1e-9)
+            elbow_fold = p1_elbow_ang - angle_3pt(lm15, lm13, lm11)
+            if wrist_rise >= 0.15 and elbow_fold >= 15:
+                p3_frame = fr
+                p3_idx   = fi
+                print(f"[PHASES] P3 halfway back: frame={p3_idx} "
+                      f"wrist_rise={wrist_rise:.3f} elbow_fold={elbow_fold:.1f}",
                       flush=True)
                 break
 
-        if p4_idx is None:
-            print("[PHASES] P4 not detected — no local Y minimum found",
-                  flush=True)
+    if p3_idx is None:
+        print("[PHASES] P3 not detected", flush=True)
 
-    max_sh_rot = 0.0
+    # P4 — Top of Backswing (Approach 12)
+    # Lead wrist (lm15) in-plane speed argmin, smoothed sigma=5
+    p4_idx, p4_frame = None, None
+    p3_start      = p3_idx if p3_idx is not None else p1_idx
+    post_p3_poses = [(fi, fr) for fi, fr in pose_frames if fi > p3_start]
 
-    # P5 — Lead arm parallel to floor (downswing)
-    # Signal: lm15_3d.y - lm11_3d.y
-    # After P4 arm is above horizontal (signal < 0); at P5 it crosses 0 going positive
-    p5_idx, p5_frame = None, None
-    post_p4_poses = [(fi, wy, fr) for fi, wy, fr in rw if fi > (p4_idx or 0)]
-    arm_d_diffs, arm_d_ents = [], []
-    for fi, wy, fr in post_p4_poses:
-        lm15 = lm3(fr, 15); lm11 = lm3(fr, 11)
-        if not lm15 or not lm11: continue
-        arm_d_diffs.append(lm15['y'] - lm11['y'])
-        arm_d_ents.append((fi, fr))
+    p4_speeds  = []
+    p4_ents    = []
+    lm15_prev  = None
+    proj_prev  = None
 
-    if len(arm_d_diffs) >= 7:
-        ad_sm, ad_off = _sm(np.array(arm_d_diffs), sigma=3)
-        for i in range(1, len(ad_sm)):
-            if ad_sm[i-1] <= 0 and ad_sm[i] > 0:
-                raw_i    = min(i + ad_off, len(arm_d_ents) - 1)
-                p5_idx   = arm_d_ents[raw_i][0]
-                p5_frame = arm_d_ents[raw_i][1]
-                print(f"[PHASES] P5 arm horizontal: frame={p5_idx}", flush=True)
-                break
+    for fi, fr in post_p3_poses:
+        lm15_curr = lm3(fr, 15)
+        if lm15_curr is None:
+            lm15_prev = None
+            proj_prev = None
+            continue
+        if lm15_prev is not None and proj_prev is not None:
+            p_curr = proj_plane(lm15_curr, n_hat)
+            v_x    = p_curr[0] - proj_prev[0]
+            v_y    = lm15_curr['y'] - lm15_prev['y']
+            v_z    = p_curr[2] - proj_prev[2]
+            p4_speeds.append(sqrt(v_x**2 + v_y**2 + v_z**2))
+            p4_ents.append((fi, fr))
+        lm15_prev = lm15_curr
+        proj_prev = proj_plane(lm15_curr, n_hat)
 
-    if p5_idx is None:
-        print("[PHASES] P5 not detected — no arm zero-crossing after P4", flush=True)
+    if len(p4_speeds) >= 3:
+        sp_arr        = np.array(p4_speeds)
+        sp_sm, sp_off = gaussian_smooth(sp_arr, sigma=5)
+        p4_raw_i      = int(np.argmin(sp_sm))
+        p4_ent_i      = min(p4_raw_i + sp_off, len(p4_ents) - 1)
+        p4_idx        = p4_ents[p4_ent_i][0]
+        p4_frame      = p4_ents[p4_ent_i][1]
+        print(f"[PHASES] P4 top of backswing: frame={p4_idx} "
+              f"speed={sp_sm[p4_raw_i]:.5f}", flush=True)
+    else:
+        print("[PHASES] P4 not detected — insufficient frames", flush=True)
 
-    print(f"[PHASES] P5 frame: {p5_idx}", flush=True)
-
-    # P7 — Impact: frame of minimum distance between club head and golf ball
+    # P7 — Impact (YOLO — intentional, critical)
+    # Primary: argmin(club_head ↔ golf_ball distance) over frames post-P4
     p7_idx, p7_frame = None, None
 
     if len(club_lookup) > 5:
@@ -694,10 +667,9 @@ def detect_phases():
             frame_num = f['frame']
             if p4_idx and frame_num <= p4_idx:
                 continue
-            ch = f['club_head']
-            gb = f['golf_ball']
-            dist = ((ch['x'] - gb['x'])**2 +
-                    (ch['y'] - gb['y'])**2) ** 0.5
+            ch   = f['club_head']
+            gb   = f['golf_ball']
+            dist = sqrt((ch['x'] - gb['x'])**2 + (ch['y'] - gb['y'])**2)
             if dist < min_dist:
                 min_dist = dist
                 p7_frame = f
@@ -705,128 +677,118 @@ def detect_phases():
                     if fr['frame'] == frame_num:
                         p7_idx = fi
                         break
-
         if p7_frame:
             print(f"[PHASES] P7 from ball proximity: "
                   f"frame {p7_frame['frame']} dist={min_dist:.4f}", flush=True)
 
-    # Fallback to wrist velocity if no ball detected
+    # Fallback: max wrist velocity post-P4
     if p7_idx is None:
-        post_p4 = [(fi, wy, fr) for fi, wy, fr in rw if fi > (p4_idx or 0)]
-        if len(post_p4) > 1:
+        post_p4_rw = [(fi, wy, fr) for fi, wy, fr in rw if fi > (p4_idx or 0)]
+        if len(post_p4_rw) > 1:
             velocities = [
-                (abs(post_p4[i][1] - post_p4[i-1][1]),
-                 post_p4[i][0], post_p4[i][2])
-                for i in range(1, len(post_p4))
+                (abs(post_p4_rw[i][1] - post_p4_rw[i-1][1]),
+                 post_p4_rw[i][0], post_p4_rw[i][2])
+                for i in range(1, len(post_p4_rw))
             ]
             velocities.sort(reverse=True)
-            p7_idx = velocities[0][1]
+            p7_idx   = velocities[0][1]
             p7_frame = velocities[0][2]
             print(f"[PHASES] P7 fallback wrist velocity: "
                   f"frame {p7_frame['frame']}", flush=True)
 
-    # P6 — Club shaft parallel to floor (downswing)
-    # Signal: |club_head.y - club_handle.y| YOLO 2D; argmin in (P5, P7) window.
-    # argmin (not first local min) avoids edge-of-window noise artefacts.
+    # P2 — Takeaway (estimated after P4 confirmed)
+    p2_idx, p2_frame = None, None
+    if p4_idx is not None:
+        p2_idx   = p1_idx + round((p4_idx - p1_idx) * 0.25)
+        p2_frame = next((fr for fi, fr in pose_frames if fi >= p2_idx), None)
+        print(f"[PHASES] P2 estimated: frame={p2_idx}", flush=True)
+
+    # P5 — Transition: hip rotation peak
+    # First frame where d_hip_angle (smoothed sigma=3) goes from >= 0 to < 0
+    p5_idx, p5_frame = None, None
+    post_p4_poses    = [(fi, fr) for fi, fr in pose_frames if fi > (p4_idx or 0)]
+    hip_angles       = []
+    hip_ents         = []
+
+    for fi, fr in post_p4_poses:
+        lm23 = lm3(fr, 23)
+        lm24 = lm3(fr, 24)
+        if not (lm23 and lm24) or hip_ref_vec is None:
+            continue
+        seg      = np.array([lm24['x']-lm23['x'],
+                              lm24['y']-lm23['y'],
+                              lm24['z']-lm23['z']])
+        seg_perp = seg - np.dot(seg, s_hat) * s_hat
+        ref_perp = hip_ref_vec - np.dot(hip_ref_vec, s_hat) * s_hat
+        cos_a    = np.dot(seg_perp, ref_perp) / (
+                       np.linalg.norm(seg_perp) * np.linalg.norm(ref_perp) + 1e-9)
+        hip_angles.append(degrees(acos(np.clip(cos_a, -1, 1))))
+        hip_ents.append((fi, fr))
+
+    if len(hip_angles) >= 3:
+        ha_arr        = np.array(hip_angles)
+        ha_sm, ha_off = gaussian_smooth(ha_arr, sigma=3)
+        d_ha          = np.diff(ha_sm)
+        for i in range(1, len(d_ha)):
+            if d_ha[i-1] >= 0 and d_ha[i] < 0:
+                raw_i    = min(i + ha_off, len(hip_ents) - 1)
+                p5_idx   = hip_ents[raw_i][0]
+                p5_frame = hip_ents[raw_i][1]
+                print(f"[PHASES] P5 transition: frame={p5_idx}", flush=True)
+                break
+
+    if p5_idx is None:
+        print("[PHASES] P5 not detected — no hip angle reversal after P4", flush=True)
+
+    # P6 — Pre-Impact (estimated after P7 confirmed)
     p6_idx, p6_frame = None, None
-    search_start_p6 = p5_idx or p4_idx or 0
-    search_end_p6   = p7_idx if p7_idx is not None else float('inf')
-    shaft_d_diffs, shaft_d_ents = [], []
-    for f in sorted(frames, key=lambda x: x['frame']):
-        fn = f['frame']
-        if fn <= search_start_p6: continue
-        if fn >= search_end_p6:   break
-        ch  = f.get('club_head')
-        hdl = f.get('club_handle')
-        if not ch or not hdl: continue
-        shaft_d_diffs.append(abs(ch['y'] - hdl['y']))
-        shaft_d_ents.append((fn, f))
+    if p4_idx is not None and p7_idx is not None:
+        p6_idx   = p4_idx + round((p7_idx - p4_idx) * 0.75)
+        p6_frame = next((fr for fi, fr in pose_frames if fi >= p6_idx), None)
+        print(f"[PHASES] P6 estimated: frame={p6_idx}", flush=True)
 
-    if len(shaft_d_diffs) >= 3:
-        raw_i    = int(np.argmin(shaft_d_diffs))
-        fn6      = shaft_d_ents[raw_i][0]
-        p6_frame = shaft_d_ents[raw_i][1]
-        for fi, wy, fr in rw:
-            if fr['frame'] == fn6:
-                p6_idx = fi; break
-        print(f"[PHASES] P6 club horizontal (argmin): frame={p6_idx}", flush=True)
+    print(f"[PHASES] P1={p1_idx} P2={p2_idx} P3={p3_idx} P4={p4_idx} "
+          f"P5={p5_idx} P6={p6_idx} P7={p7_idx} | "
+          f"n_hat={n_hat.round(3).tolist()}", flush=True)
 
-    # Fallback: wrist returns to shoulder Y level on downswing (P5 → P7)
-    if p6_idx is None:
-        fb_start = p5_idx or p4_idx or 0
-        for fi, wy, fr in rw:
-            if fi <= fb_start: continue
-            if p7_idx is not None and fi >= p7_idx: break
-            ls = lm3(fr, 11); rs = lm3(fr, 12)
-            if ls and rs:
-                smy = (ls['y'] + rs['y']) / 2
-                if wy > smy:
-                    p6_frame = fr; p6_idx = fi; break
-        if p6_idx:
-            print(f"[PHASES] P6 fallback wrist-shoulder: frame={p6_idx}", flush=True)
-
-    if p6_idx is None:
-        print("[PHASES] P6 not detected", flush=True)
-
-    print(f"[PHASES] P6 frame: {p6_idx}", flush=True)
-
-    print(f"[PHASES] P1={p1_idx} P2={p2_idx} P3={p3_idx} P4={p4_idx} P5={p5_idx} P6={p6_idx} P7={p7_idx} | n_hat={n_hat.round(3).tolist()}", flush=True)
-
-    def pr(label, fr, fi):
+    def pr(label, fr, fi, detected=True):
         if fr is None:
             return {'label': label, 'frame': None, 'time_s': None, 'detected': False}
         return {'label': label, 'frame': fi,
-                'time_s': round(fi / fps, 3), 'detected': True}
+                'time_s': round(fi / fps, 3), 'detected': detected}
 
     # ── Per-phase metric computation ───────────────────────────────────────────
     def _metrics(fr, phase=None):
-        """Compute measured biomechanical metrics from a phase frame dict."""
         m = {}
         if fr is None:
             return m
 
-        ls  = lm3(fr, 11); rs  = lm3(fr, 12)   # lead/trail shoulder
-        lh  = lm3(fr, 23); rh  = lm3(fr, 24)   # lead/trail hip
-        le  = lm3(fr, 13); te  = lm3(fr, 14)   # lead/trail elbow
-        lw  = lm3(fr, 15); tw  = lm3(fr, 16)   # lead/trail wrist
-        lk  = lm3(fr, 25); rk  = lm3(fr, 26)   # lead/trail knee
-        la  = lm3(fr, 27); ra  = lm3(fr, 28)   # lead/trail ankle
+        ls  = lm3(fr, 11); rs  = lm3(fr, 12)
+        lh  = lm3(fr, 23); rh  = lm3(fr, 24)
+        le  = lm3(fr, 13); te  = lm3(fr, 14)
+        lw  = lm3(fr, 15); tw  = lm3(fr, 16)
+        lk  = lm3(fr, 25); rk  = lm3(fr, 26)
+        la  = lm3(fr, 27); ra  = lm3(fr, 28)
 
-        # Shoulder turn (degrees from P1 reference, projected onto transverse plane)
         if ls and rs and sh_ref_vec is not None:
             m['shoulder_turn'] = round(segment_rotation(ls, rs, sh_ref_vec, s_hat), 1)
-
-        # Hip turn
         if lh and rh and hip_ref_vec is not None:
             m['hip_turn'] = round(segment_rotation(lh, rh, hip_ref_vec, s_hat), 1)
-
-        # X-Factor (shoulder turn minus hip turn)
         if 'shoulder_turn' in m and 'hip_turn' in m:
             m['x_factor'] = round(m['shoulder_turn'] - m['hip_turn'], 1)
-
-        # Trail elbow angle (trail shoulder – trail elbow – trail wrist)
         if rs and te and tw:
             v = angle_3pt(rs, te, tw)
             if v is not None: m['trail_elbow'] = round(v, 1)
-
-        # Lead elbow angle (lead shoulder – lead elbow – lead wrist)
         if ls and le and lw:
             v = angle_3pt(ls, le, lw)
             if v is not None: m['lead_elbow'] = round(v, 1)
-
-        # Lead knee angle (lead hip – lead knee – lead ankle)
         if lh and lk and la:
             v = angle_3pt(lh, lk, la)
             if v is not None: m['lead_knee'] = round(v, 1)
-
-        # Trail knee angle (trail hip – trail knee – trail ankle)
         if rh and rk and ra:
             v = angle_3pt(rh, rk, ra)
             if v is not None: m['trail_knee'] = round(v, 1)
 
-        # P1 only — trail knee flex and status (DTL; trail = right side for RH golfer)
-        # Flex = 180° − joint angle (0° = straight leg, 25° = flexed).
-        # Internal pass: 12–35°  |  Display target: 15–30°  |  Fail: <12° or >35°
         if phase == 'P1' and rh and rk and ra:
             v = angle_3pt(rh, rk, ra)
             if v is not None:
@@ -834,12 +796,6 @@ def detect_phases():
                 m['trail_knee_flex_p1'] = flex
                 m['trail_knee_status'] = 'pass' if 12.0 <= flex <= 35.0 else 'fail'
 
-        # Forward bend — sagittal-plane forward tilt of spine from vertical.
-        # Uses Z component of normalised hip→shoulder vector in MediaPipe world coords.
-        # Z = depth axis (toward/away from camera); Y = vertical (negative = up).
-        # forward_bend = atan2(|sv_z|, |sv_y|)
-        # Coaching benchmark (down-the-line, 2D): 32-45°.
-        # Note: face-on camera underestimates this value vs down-the-line measurement.
         if ls and rs and lh and rh:
             sh_mid = np.array([(ls['x']+rs['x'])/2,
                                (ls['y']+rs['y'])/2,
@@ -857,11 +813,6 @@ def detect_phases():
                 m['spine_angle_estimated'] = m['forward_bend']
                 m['spine_angle_confidence'] = 'placeholder'
 
-        # Shaft angle — angle of club shaft from horizontal (face-on view).
-        # Driver avg ~55°, irons ~60-65°. Benchmark 55-65°.
-        # Computed from YOLO 2D: atan2(|dy|, |dx|).
-        # P1 only: shaft_angle_p1 = abs value; pass 2–10°, fail <2° or >12°.
-        # All other phases: magnitude-only behaviour unchanged.
         ch_det  = fr.get('club_head')
         hdl_det = fr.get('club_handle')
         if ch_det and hdl_det:
@@ -869,8 +820,6 @@ def detect_phases():
             dy = abs(ch_det['y'] - hdl_det['y'])
             if dx > 0.005 or dy > 0.005:
                 m['shaft_angle'] = round(math.degrees(math.atan2(dy, dx)), 1)
-                # P1 only — absolute shaft angle with pass/fail status.
-                # Pass: 2–10°  |  Fail: <2° or >12°
                 if phase == 'P1':
                     sa = abs(m['shaft_angle'])
                     m['shaft_angle_p1'] = sa
@@ -890,20 +839,20 @@ def detect_phases():
     print(f"[METRICS] P1={phase_metrics['P1']} P4={phase_metrics['P4']}", flush=True)
 
     freeze_frames = [
-        fi for _, fi in [
+        fi for label, fi in [
             ('P1', p1_idx), ('P3', p3_idx),
             ('P4', p4_idx), ('P5', p5_idx),
-            ('P6', p6_idx), ('P7', p7_idx),
+            ('P7', p7_idx),
         ] if fi is not None
     ]
 
     return jsonify({
         'P1': pr('Address',    p1_frame, p1_idx),
-        'P2': pr('Takeaway',   p2_frame, p2_idx),
+        'P2': pr('Takeaway',   p2_frame, p2_idx, detected=False),
         'P3': pr('Halfway',    p3_frame, p3_idx),
         'P4': pr('Top',        p4_frame, p4_idx),
         'P5': pr('Transition', p5_frame, p5_idx),
-        'P6': pr('Pre-Impact', p6_frame, p6_idx),
+        'P6': pr('Pre-Impact', p6_frame, p6_idx, detected=False),
         'P7': pr('Impact',     p7_frame, p7_idx),
         'freeze_frames': freeze_frames,
         'metrics': phase_metrics,
