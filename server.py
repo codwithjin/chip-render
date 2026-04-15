@@ -18,12 +18,6 @@ _static_folder = REACT_BUILD_DIR if os.path.isdir(REACT_BUILD_DIR) else os.path.
 app = Flask(__name__, static_folder=_static_folder, static_url_path='')
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB
 
-DATABASE_URL = os.environ.get('DATABASE_URL')
-
-def get_db():
-    import psycopg2
-    return psycopg2.connect(DATABASE_URL)
-
 JOINT_IDS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 MAX_FILE_MB = 500
 jobs = {}           # job_id → job dict
@@ -925,29 +919,6 @@ def serve_react(path):
         return send_from_directory(_static_folder, path)
     return send_from_directory(_static_folder, 'index.html')
 
-
-# ── Sessions API ──────────────────────────────────────────────────────────────
-@app.route('/api/sessions', methods=['POST'])
-def create_session():
-    if not DATABASE_URL:
-        return jsonify({'error': 'No database configured'}), 503
-    data = request.json
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO swing_sessions
-        (golfer_name, video_filename, fps, total_frames, phases, metrics)
-        VALUES (%s,%s,%s,%s,%s,%s) RETURNING id
-    """, (
-        data.get('golfer_name', ''),
-        data.get('video_filename', ''),
-        data.get('fps', 30),
-        data.get('total_frames', 0),
-        json.dumps(data.get('phases', {})),
-        json.dumps(data.get('metrics', {})),
-    ))
-    session_id = cur.fetchone()[0]
-    conn.commit(); cur.close(); conn.close()
-    return jsonify({'id': str(session_id)})
 
 
 @app.route('/api/sessions', methods=['GET'])
