@@ -126,17 +126,21 @@ def draw_yolo(frame, yolo_detections, frame_w, frame_h):
     return frame
 
 
-# ── R2 upload ──────────────────────────────────────────────────────────────────
+# ── R2 client + upload/download ────────────────────────────────────────────────
+def _r2_client():
+    return boto3.client(
+        's3',
+        endpoint_url=os.environ.get('CLOUDFLARE_R2_ENDPOINT'),
+        aws_access_key_id=os.environ.get('CLOUDFLARE_R2_ACCESS_KEY'),
+        aws_secret_access_key=os.environ.get('CLOUDFLARE_R2_SECRET_KEY'),
+        config=Config(signature_version='s3v4'),
+        region_name='auto',
+    )
+
+
 def upload_to_r2(file_path, key):
     try:
-        s3 = boto3.client(
-            's3',
-            endpoint_url=os.environ.get('CLOUDFLARE_R2_ENDPOINT'),
-            aws_access_key_id=os.environ.get('CLOUDFLARE_R2_ACCESS_KEY'),
-            aws_secret_access_key=os.environ.get('CLOUDFLARE_R2_SECRET_KEY'),
-            config=Config(signature_version='s3v4'),
-            region_name='auto',
-        )
+        s3 = _r2_client()
         bucket = os.environ.get('CLOUDFLARE_R2_BUCKET', 'user-swing-archives')
         s3.upload_file(file_path, bucket, key,
                        ExtraArgs={'ContentType': 'video/mp4'})
@@ -147,6 +151,16 @@ def upload_to_r2(file_path, key):
     except Exception as e:
         print(f'[R2] upload failed: {e}', flush=True)
         return None
+
+
+# BUILD-150 — download a raw trimmed swing from the ingest bucket. Called by
+# /process-r2 to hydrate the file chip-proxy stored at `r2_key`. Separate
+# bucket from the annotated-output one above (chip-swings vs user-swing-archives).
+def download_from_r2(key, dest_path):
+    s3 = _r2_client()
+    bucket = os.environ.get('CLOUDFLARE_R2_INGEST_BUCKET', 'chip-swings')
+    s3.download_file(bucket, key, dest_path)
+    print(f'[R2] downloaded {bucket}/{key} -> {dest_path}', flush=True)
 
 
 # ── YOLO model ─────────────────────────────────────────────────────────────────
@@ -265,6 +279,65 @@ def process_video():
 
     start_ms = float(request.form.get('start_ms', 0))
     end_ms   = float(request.form.get('end_ms', 9999999))
+
+    t = threading.Thread(target=run_mediapipe,
+                         args=(tmp.name, job_id, start_ms, end_ms),
+                         daemon=True)
+    t.start()
+    return jsonify({'job_id': job_id})
+
+
+# BUILD-150 — direct-from-R2 analysis entry point. Called by chip-proxy's
+# /api/swings register handler (BUILD-45) after the client PUTs the trimmed
+# MP4 to R2. Mirrors /process except it sources bytes from the R2 bucket
+# chip-proxy's presign handler signed against instead of accepting multipart.
+@app.route('/process-r2', methods=['POST'])
+def process_r2():
+    body = request.get_json(silent=True) or {}
+    r2_key   = body.get('r2_key')
+    start_ms = float(body.get('start_ms', 0))
+    end_ms   = float(body.get('end_ms', 9999999))
+
+    if not isinstance(r2_key, str) or not r2_key:
+        return jsonify({'error': 'invalid_r2_key'}), 400
+
+    job_id = str(uuid.uuid4())[:8]
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+    tmp.close()
+
+    try:
+        download_from_r2(r2_key, tmp.name)
+    except Exception as e:
+        msg = str(e)
+        print(f'[/process-r2] download failed: {msg}', flush=True)
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        # boto3 raises ClientError with 404-ish code for missing keys; surface
+        # as 404 so chip-proxy can distinguish upload-not-found from transport.
+        if '404' in msg or 'NoSuchKey' in msg or 'Not Found' in msg:
+            return jsonify({'error': 'upload_not_found'}), 404
+        return jsonify({'error': 'r2_download_failed'}), 502
+
+    size_mb = os.path.getsize(tmp.name) / (1024 * 1024)
+    if size_mb > MAX_FILE_MB:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        return jsonify({'error': f'File too large ({size_mb:.0f}MB). Max {MAX_FILE_MB}MB.'}), 400
+
+    with jobs_lock:
+        jobs[job_id] = {
+            'status':     'processing',
+            'progress':   0,
+            'total':      0,
+            'result':     None,
+            'error':      None,
+            'created_at': time.time(),
+            'filename':   os.path.basename(r2_key),
+        }
 
     t = threading.Thread(target=run_mediapipe,
                          args=(tmp.name, job_id, start_ms, end_ms),
