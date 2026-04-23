@@ -11,9 +11,63 @@ from mediapipe.tasks.python import vision as mp_vision
 from ultralytics import YOLO
 import boto3
 from botocore.client import Config
+import psycopg2
 
 BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
 REACT_BUILD_DIR = os.path.join(BASE_DIR, 'static_react')
+
+# caddie2 Postgres — same DATABASE_URL value as caddie2's Railway service.
+# Used by update_swing_analyses_row() to write analysis results back to
+# swing_analyses rows that caddie2 created at presign time. If unset, the
+# helper logs and no-ops so the in-memory jobs dict still works.
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+
+# Persist analysis result back to caddie2's swing_analyses row. Joins on
+# r2_key (unique, set at presign time, already in /process-r2 contract —
+# avoids needing caddie2 to forward swing_id). Failures are encoded inside
+# result_json as {"error": "...", "error_type": "..."} since the schema
+# has no dedicated error_message column.
+def update_swing_analyses_row(r2_key, status, result_json=None, video_url=None):
+    if not DATABASE_URL:
+        print(f"[writeback] DATABASE_URL not set, cannot persist r2_key={r2_key}", flush=True)
+        return False
+    if not r2_key:
+        print(f"[writeback] No r2_key provided, skipping UPDATE", flush=True)
+        return False
+
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = True
+        cur = conn.cursor()
+
+        fields = ["status = %s", "analyzed_at = NOW()"]
+        values = [status]
+
+        if result_json is not None:
+            fields.append("result_json = %s")
+            values.append(json.dumps(result_json) if isinstance(result_json, (dict, list)) else result_json)
+        if video_url is not None:
+            fields.append("video_url = %s")
+            values.append(video_url)
+
+        values.append(r2_key)
+        sql = f"UPDATE swing_analyses SET {', '.join(fields)} WHERE r2_key = %s"
+
+        print(f"[writeback] r2_key={r2_key} status={status}", flush=True)
+        cur.execute(sql, values)
+        rows = cur.rowcount
+        cur.close()
+        conn.close()
+
+        if rows == 0:
+            print(f"[writeback] r2_key={r2_key} matched 0 rows — row missing or already updated", flush=True)
+            return False
+        print(f"[writeback] r2_key={r2_key} status={status} OK ({rows} row)", flush=True)
+        return True
+    except Exception as e:
+        print(f"[writeback] r2_key={r2_key} FAILED: {type(e).__name__}: {e}", flush=True)
+        return False
 
 # Serve React build if it exists, otherwise fall back to old static folder
 _static_folder = REACT_BUILD_DIR if os.path.isdir(REACT_BUILD_DIR) else os.path.join(BASE_DIR, 'static')
@@ -280,8 +334,9 @@ def process_video():
     start_ms = float(request.form.get('start_ms', 0))
     end_ms   = float(request.form.get('end_ms', 9999999))
 
+    # Legacy multipart entry — no r2_key (no caddie2 swing_analyses row to update).
     t = threading.Thread(target=run_mediapipe,
-                         args=(tmp.name, job_id, start_ms, end_ms),
+                         args=(tmp.name, job_id, start_ms, end_ms, None),
                          daemon=True)
     t.start()
     return jsonify({'job_id': job_id})
@@ -340,13 +395,13 @@ def process_r2():
         }
 
     t = threading.Thread(target=run_mediapipe,
-                         args=(tmp.name, job_id, start_ms, end_ms),
+                         args=(tmp.name, job_id, start_ms, end_ms, r2_key),
                          daemon=True)
     t.start()
     return jsonify({'job_id': job_id})
 
 
-def run_mediapipe(video_path, job_id, start_ms=0, end_ms=9999999):
+def run_mediapipe(video_path, job_id, start_ms=0, end_ms=9999999, source_r2_key=None):
     raw_path       = None
     annotated_path = None
     try:
@@ -557,8 +612,8 @@ def run_mediapipe(video_path, job_id, start_ms=0, end_ms=9999999):
                 annotated_path = None
             else:
                 print(f'[ANNOTATE] encoded: {annotated_path}', flush=True)
-                r2_key    = f'swings/{job_id}.mp4'
-                video_url = upload_to_r2(annotated_path, r2_key)
+                annotated_r2_key = f'swings/{job_id}.mp4'
+                video_url = upload_to_r2(annotated_path, annotated_r2_key)
 
         result = {
             'fps':          fps,
@@ -574,6 +629,13 @@ def run_mediapipe(video_path, job_id, start_ms=0, end_ms=9999999):
             jobs[job_id]['status'] = 'done'
             jobs[job_id]['result'] = result
 
+        update_swing_analyses_row(
+            r2_key=source_r2_key,
+            status='complete',
+            result_json=result,
+            video_url=video_url,
+        )
+
     except Exception as e:
         import traceback
         print(f"[MediaPipe] ERROR: {e}", flush=True)
@@ -581,6 +643,14 @@ def run_mediapipe(video_path, job_id, start_ms=0, end_ms=9999999):
         with jobs_lock:
             jobs[job_id]['status'] = 'error'
             jobs[job_id]['error']  = str(e)
+        update_swing_analyses_row(
+            r2_key=source_r2_key,
+            status='failed',
+            result_json={
+                'error':      str(e),
+                'error_type': type(e).__name__,
+            },
+        )
     finally:
         for path in [video_path, raw_path, annotated_path]:
             if path and os.path.exists(path):
